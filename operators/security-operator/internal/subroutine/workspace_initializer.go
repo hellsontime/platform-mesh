@@ -60,6 +60,7 @@ func NewWorkspaceInitializer(cfg config.Config, mgr mcmanager.Manager, kcpClient
 var (
 	_ subroutines.Initializer = &workspaceInitializer{}
 	_ subroutines.Processor   = &workspaceInitializer{}
+	_ subroutines.Terminator  = &workspaceInitializer{}
 )
 
 type workspaceInitializer struct {
@@ -170,6 +171,28 @@ func (w *workspaceInitializer) reconcile(ctx context.Context, obj client.Object)
 	if store.Status.StoreID == "" {
 		// Store is not ready yet, requeue
 		return subroutines.StopWithRequeue(5*time.Second, "store id is empty"), nil
+	}
+
+	return subroutines.OK(), nil
+}
+
+// Terminate implements subroutines.Terminator.
+func (w *workspaceInitializer) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
+	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
+
+	storeName := generateStoreName(lc)
+	if storeName == "" {
+		return subroutines.OK(), nil
+	}
+
+	orgsClient, err := w.kcpClientGetter.NewClientForLogicalCluster(ctx, "root:orgs")
+	if err != nil {
+		return subroutines.OK(), fmt.Errorf("getting orgs client: %w", err)
+	}
+
+	store := corev1alpha1.Store{ObjectMeta: metav1.ObjectMeta{Name: storeName}}
+	if err := orgsClient.Delete(ctx, &store); err != nil && !kerrors.IsNotFound(err) {
+		return subroutines.OK(), fmt.Errorf("deleting store %s: %w", storeName, err)
 	}
 
 	return subroutines.OK(), nil

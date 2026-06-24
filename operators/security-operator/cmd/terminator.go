@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -115,6 +116,27 @@ var terminatorCmd = &cobra.Command{
 			predicate.Not(predicates.LogicalClusterIsAccountTypeOrg()),
 		); err != nil {
 			log.Error().Err(err).Msg("Unable to create AccountLogicalClusterTerminator")
+			os.Exit(1)
+		}
+
+		runtimeClient, err := client.New(ctrl.GetConfigOrDie(), client.Options{Scheme: scheme})
+		if err != nil {
+			log.Error().Err(err).Msg("Failed to create in cluster client")
+			os.Exit(1)
+		}
+
+		orgReconciler, err := controller.NewOrgLogicalClusterController(log, kcpClientGetter, terminatorCfg, runtimeClient, mgr, controller.ControllerOptions{
+			Name:           "OrgLogicalClusterTerminator",
+			TerminatorName: terminatorCfg.TerminatorName(),
+		})
+		if err != nil {
+			log.Error().Err(err).Msg("unable to create OrgLogicalCluster terminator")
+			os.Exit(1)
+		}
+		if err := orgReconciler.SetupWithManager(mgr, defaultCfg,
+			predicates.LogicalClusterIsAccountTypeOrg(),
+		); err != nil {
+			log.Error().Err(err).Msg("Unable to create OrgLogicalClusterTerminator")
 			os.Exit(1)
 		}
 

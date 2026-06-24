@@ -34,6 +34,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -66,6 +67,7 @@ func NewIDPSubroutine(mgr mcmanager.Manager, kcpClientGetter iclient.KCPClientGe
 var (
 	_ subroutines.Initializer = &IDPSubroutine{}
 	_ subroutines.Processor   = &IDPSubroutine{}
+	_ subroutines.Terminator  = &IDPSubroutine{}
 )
 
 type IDPSubroutine struct {
@@ -184,6 +186,28 @@ func (i *IDPSubroutine) reconcile(ctx context.Context, obj client.Object) (subro
 	}
 
 	log.Info().Str("workspace", workspaceName).Msg("idp resource is ready")
+	return subroutines.OK(), nil
+}
+
+// Terminate implements subroutines.Terminator.
+func (i *IDPSubroutine) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
+	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
+
+	workspaceName := getWorkspaceName(lc)
+	if workspaceName == "" {
+		return subroutines.OK(), nil
+	}
+
+	orgsClient, err := i.kcpClientGetter.NewClientForLogicalCluster(ctx, "root:orgs")
+	if err != nil {
+		return subroutines.OK(), fmt.Errorf("getting orgs client: %w", err)
+	}
+
+	idp := corev1alpha1.IdentityProviderConfiguration{ObjectMeta: metav1.ObjectMeta{Name: workspaceName}}
+	if err := orgsClient.Delete(ctx, &idp); err != nil && !kerrors.IsNotFound(err) {
+		return subroutines.OK(), fmt.Errorf("deleting idp %s: %w", workspaceName, err)
+	}
+
 	return subroutines.OK(), nil
 }
 
