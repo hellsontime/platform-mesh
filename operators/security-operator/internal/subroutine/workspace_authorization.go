@@ -188,7 +188,7 @@ func (r *workspaceAuthSubroutine) Terminate(ctx context.Context, obj client.Obje
 
 	workspaceName := getWorkspaceName(lc)
 	if workspaceName == "" {
-		return subroutines.OK(), fmt.Errorf("failed to get workspace path")
+		return subroutines.OK(), nil
 	}
 
 	orgsClient, err := r.kcpClientGetter.NewClientForLogicalCluster(ctx, "root:orgs")

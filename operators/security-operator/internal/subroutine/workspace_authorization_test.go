@@ -863,10 +863,10 @@ func TestWorkspaceAuthSubroutine_Terminate(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "error - missing workspace path annotation",
+			name:        "success - missing workspace path annotation is a no-op",
 			path:        "",
 			setupMocks:  func(m *mocks.MockClient) {},
-			expectError: true,
+			expectError: false,
 		},
 	}
 

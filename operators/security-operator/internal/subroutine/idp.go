@@ -199,7 +199,7 @@ func (i *IDPSubroutine) Terminate(ctx context.Context, obj client.Object) (subro
 
 	workspaceName := getWorkspaceName(lc)
 	if workspaceName == "" {
-		return subroutines.OK(), fmt.Errorf("failed to get workspace name")
+		return subroutines.OK(), nil
 	}
 
 	orgsClient, err := i.kcpClientGetter.NewClientForLogicalCluster(ctx, "root:orgs")

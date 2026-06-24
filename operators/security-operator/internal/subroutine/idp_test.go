@@ -628,10 +628,10 @@ func TestIDPSubroutine_Terminate(t *testing.T) {
 			expectError: true,
 		},
 		{
-			name:        "error - missing workspace name annotation",
+			name:        "success - missing workspace name annotation is a no-op",
 			path:        "",
 			setupMocks:  func(m *mocks.MockClient) {},
-			expectError: true,
+			expectError: false,
 		},
 	}
 
