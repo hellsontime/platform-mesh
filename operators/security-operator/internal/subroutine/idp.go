@@ -189,11 +189,7 @@ func (i *IDPSubroutine) reconcile(ctx context.Context, obj client.Object) (subro
 	return subroutines.OK(), nil
 }
 
-// Terminate implements subroutines.Terminator. It deletes the org's
-// IdentityProviderConfiguration CR in root:orgs; the IDP's own finalizer cascades
-// deletion of the Keycloak realm, clients and their secrets. The CR lives in
-// root:orgs (which outlives this org's logical cluster), so we issue the delete
-// and return without waiting for the cascade to finish.
+// Terminate implements subroutines.Terminator.
 func (i *IDPSubroutine) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
 	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
 

@@ -176,10 +176,7 @@ func (w *workspaceInitializer) reconcile(ctx context.Context, obj client.Object)
 	return subroutines.OK(), nil
 }
 
-// Terminate implements subroutines.Terminator. It deletes the org's Store CR in
-// root:orgs; the Store's own finalizer cascades deletion of the backing OpenFGA
-// store. The CR lives in root:orgs (which outlives this org's logical cluster),
-// so we issue the delete and return without waiting for the cascade to finish.
+// Terminate implements subroutines.Terminator.
 func (w *workspaceInitializer) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
 	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
 

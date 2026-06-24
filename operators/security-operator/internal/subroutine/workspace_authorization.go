@@ -179,10 +179,7 @@ func (r *workspaceAuthSubroutine) reconcile(ctx context.Context, obj client.Obje
 	return subroutines.OK(), nil
 }
 
-// Terminate implements subroutines.Terminator. It deletes the org's
-// WorkspaceAuthenticationConfiguration CR in root:orgs. The CR lives in root:orgs
-// (which outlives this org's logical cluster), so we issue the delete and return
-// without waiting. The associated WorkspaceTypes are removed by the account-operator.
+// Terminate implements subroutines.Terminator.
 func (r *workspaceAuthSubroutine) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
 	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
 
