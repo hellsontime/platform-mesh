@@ -31,6 +31,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
+	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -58,6 +59,7 @@ func NewWorkspaceAuthConfigurationSubroutine(runtimeClient client.Client, mgr mc
 var (
 	_ subroutines.Initializer = &workspaceAuthSubroutine{}
 	_ subroutines.Processor   = &workspaceAuthSubroutine{}
+	_ subroutines.Terminator  = &workspaceAuthSubroutine{}
 )
 
 func (r *workspaceAuthSubroutine) GetName() string { return "workspaceAuthConfiguration" }
@@ -172,6 +174,31 @@ func (r *workspaceAuthSubroutine) reconcile(ctx context.Context, obj client.Obje
 	err = r.patchWorkspaceTypes(ctx, orgsClient, workspaceName)
 	if err != nil {
 		return subroutines.OK(), fmt.Errorf("failed to patch workspace types: %w", err)
+	}
+
+	return subroutines.OK(), nil
+}
+
+// Terminate implements subroutines.Terminator. It deletes the org's
+// WorkspaceAuthenticationConfiguration CR in root:orgs. The CR lives in root:orgs
+// (which outlives this org's logical cluster), so we issue the delete and return
+// without waiting. The associated WorkspaceTypes are removed by the account-operator.
+func (r *workspaceAuthSubroutine) Terminate(ctx context.Context, obj client.Object) (subroutines.Result, error) {
+	lc := obj.(*kcpcorev1alpha1.LogicalCluster)
+
+	workspaceName := getWorkspaceName(lc)
+	if workspaceName == "" {
+		return subroutines.OK(), fmt.Errorf("failed to get workspace path")
+	}
+
+	orgsClient, err := r.kcpClientGetter.NewClientForLogicalCluster(ctx, "root:orgs")
+	if err != nil {
+		return subroutines.OK(), fmt.Errorf("getting orgs client: %w", err)
+	}
+
+	authConfig := kcptenancyv1alphav1.WorkspaceAuthenticationConfiguration{ObjectMeta: metav1.ObjectMeta{Name: workspaceName}}
+	if err := orgsClient.Delete(ctx, &authConfig); err != nil && !kerrors.IsNotFound(err) {
+		return subroutines.OK(), fmt.Errorf("deleting WorkspaceAuthenticationConfiguration %s: %w", workspaceName, err)
 	}
 
 	return subroutines.OK(), nil

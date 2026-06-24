@@ -831,6 +831,65 @@ func TestWorkspaceAuthSubroutine_Initialize(t *testing.T) {
 	}
 }
 
+func TestWorkspaceAuthSubroutine_Terminate(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		setupMocks  func(*mocks.MockClient)
+		expectError bool
+	}{
+		{
+			name: "success - deletes WorkspaceAuthenticationConfiguration",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.WorkspaceAuthenticationConfiguration"), mock.Anything).Return(nil).Once()
+			},
+		},
+		{
+			name: "success - already gone is not an error",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.WorkspaceAuthenticationConfiguration"), mock.Anything).
+					Return(apierrors.NewNotFound(kcptenancyv1alphav1.Resource("workspaceauthenticationconfigurations"), "test-workspace")).Once()
+			},
+		},
+		{
+			name: "error - delete fails",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.WorkspaceAuthenticationConfiguration"), mock.Anything).
+					Return(errors.New("delete failed")).Once()
+			},
+			expectError: true,
+		},
+		{
+			name:        "error - missing workspace path annotation",
+			path:        "",
+			setupMocks:  func(m *mocks.MockClient) {},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockClient := mocks.NewMockClient(t)
+			kcpHelper := mocks.NewMockKCPClientGetter(t)
+			tt.setupMocks(mockClient)
+			kcpHelper.EXPECT().NewClientForLogicalCluster(mock.Anything, "root:orgs").Return(mockClient, nil).Maybe()
+
+			sub := NewWorkspaceAuthConfigurationSubroutine(nil, nil, kcpHelper, config.Config{})
+			lc := &kcpcorev1alpha1.LogicalCluster{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kcp.io/path": tt.path}}}
+
+			_, err := sub.Terminate(context.Background(), lc)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestWorkspaceAuthConfigurationSubroutine_GetName(t *testing.T) {
 	sub := NewWorkspaceAuthConfigurationSubroutine(nil, nil, nil, config.Config{})
 	assert.Equal(t, "workspaceAuthConfiguration", sub.GetName())

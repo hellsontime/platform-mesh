@@ -595,3 +595,67 @@ func TestIDPSubroutine_Process(t *testing.T) {
 	assert.Error(t, err)
 	assert.Equal(t, subroutines.OK(), result)
 }
+
+func TestIDPSubroutine_Terminate(t *testing.T) {
+	tests := []struct {
+		name        string
+		path        string
+		setupMocks  func(*mocks.MockClient)
+		expectError bool
+	}{
+		{
+			name: "success - deletes IdentityProviderConfiguration",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.IdentityProviderConfiguration"), mock.Anything).Return(nil).Once()
+			},
+		},
+		{
+			name: "success - already gone is not an error",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.IdentityProviderConfiguration"), mock.Anything).
+					Return(apierrors.NewNotFound(schema.GroupResource{Group: "core.platform-mesh.io", Resource: "identityproviderconfigurations"}, "test-workspace")).Once()
+			},
+		},
+		{
+			name: "error - delete fails",
+			path: "root:orgs:test-workspace",
+			setupMocks: func(m *mocks.MockClient) {
+				m.EXPECT().Delete(mock.Anything, mock.AnythingOfType("*v1alpha1.IdentityProviderConfiguration"), mock.Anything).
+					Return(assert.AnError).Once()
+			},
+			expectError: true,
+		},
+		{
+			name:        "error - missing workspace name annotation",
+			path:        "",
+			setupMocks:  func(m *mocks.MockClient) {},
+			expectError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mgr := mocks.NewMockManager(t)
+			mockClient := mocks.NewMockClient(t)
+			kcpHelper := mocks.NewMockKCPClientGetter(t)
+			tt.setupMocks(mockClient)
+			kcpHelper.EXPECT().NewClientForLogicalCluster(mock.Anything, "root:orgs").Return(mockClient, nil).Maybe()
+
+			sub, err := NewIDPSubroutine(mgr, kcpHelper, config.Config{})
+			require.NoError(t, err)
+
+			lc := &kcpv1alpha1.LogicalCluster{
+				ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{"kcp.io/path": tt.path}},
+			}
+
+			_, err = sub.Terminate(context.Background(), lc)
+			if tt.expectError {
+				assert.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
