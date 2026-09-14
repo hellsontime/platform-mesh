@@ -34,6 +34,11 @@ func TestEncodeName(t *testing.T) {
 			want: "system%3Acontroller%3Afoo",
 		},
 		{
+			name: "encodes a slash",
+			in:   "ns1/foo",
+			want: "ns1%2Ffoo",
+		},
+		{
 			name: "encodes a hash",
 			in:   "name#fragment",
 			want: "name%23fragment",

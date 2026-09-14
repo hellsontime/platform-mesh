@@ -25,12 +25,13 @@ import (
 const upperHex = "0123456789ABCDEF"
 
 // EncodeObjectIDPart percent-encodes a raw identifier segment before it is
-// embedded in an OpenFGA object ID. OpenFGA object IDs cannot contain colons,
-// hashes, ASCII spaces, or Unicode control characters. Percent signs are also
-// escaped to keep the transformation injective.
+// embedded in an OpenFGA object ID. It escapes the characters OpenFGA forbids
+// (':', '#', ASCII space, Unicode control characters) plus '%' and '/', which
+// keep the encoding injective within a segment and across the '/'-joined
+// segments of an object ID.
 //
-// The input must be an unencoded value. Applying this function more than once
-// will encode the percent signs introduced by the first call.
+// The input must be unencoded; applying this function twice re-encodes the
+// percent signs introduced by the first call.
 func EncodeObjectIDPart(value string) string {
 	if !needsObjectIDPartEncoding(value) {
 		return value
@@ -73,7 +74,7 @@ func needsObjectIDPartEncoding(value string) bool {
 }
 
 func shouldEncodeObjectIDRune(r rune) bool {
-	return r == '%' || r == ':' || r == '#' || r == ' ' || unicode.IsControl(r)
+	return r == '%' || r == '/' || r == ':' || r == '#' || r == ' ' || unicode.IsControl(r)
 }
 
 func writePercentEncodedByte(builder *strings.Builder, value byte) {

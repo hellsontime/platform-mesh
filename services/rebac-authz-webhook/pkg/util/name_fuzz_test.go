@@ -31,6 +31,7 @@ func FuzzEncodeNameIsInjective(f *testing.F) {
 	f.Add("system:controller:foo", "system.controller.foo")
 	f.Add("name#fragment", "name%23fragment")
 	f.Add("name with space", "name%20with%20space")
+	f.Add("ns1/foo", "ns1%2Ffoo")
 	f.Add("a%b:c", "a%25b%3Ac")
 	f.Add("", ":")
 	f.Add("cluster-admin", "cluster-admin")
@@ -44,7 +45,7 @@ func FuzzEncodeNameIsInjective(f *testing.F) {
 		}
 
 		for _, r := range encA {
-			assert.Falsef(t, r == ':' || r == '#' || r == ' ' || unicode.IsControl(r),
+			assert.Falsef(t, r == ':' || r == '#' || r == '/' || r == ' ' || unicode.IsControl(r),
 				"EncodeName(%q) = %q contains OpenFGA-forbidden rune %q", a, encA, r)
 		}
 	})

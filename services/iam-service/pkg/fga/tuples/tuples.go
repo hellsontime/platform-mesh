@@ -17,7 +17,6 @@ limitations under the License.
 package tuples
 
 import (
-	"fmt"
 	"strings"
 
 	openfgav1 "github.com/openfga/api/proto/openfga/v1"
@@ -32,12 +31,12 @@ func GenerateContextualTuples(rctx *graph.ResourceContext, ai *pmcorev1alpha1.Ac
 	tuples := &openfgav1.ContextualTupleKeys{}
 
 	accFGATypeName := util.ConvertToTypeName("core.platform-mesh.io", "Account")
-	accObject := fmt.Sprintf("%s:%s/%s", accFGATypeName, ai.Spec.Account.OriginClusterId, ai.Spec.Account.Name)
+	accObject := fgamodel.BuildObjectNameFromType(accFGATypeName, ai.Spec.Account.OriginClusterId, ai.Spec.Account.Name, nil)
 
 	var nsObject string
 	if rctx.Resource.Namespace != nil {
 		nsFGATypeName := util.ConvertToTypeName("", "Namespace")
-		nsObject = fmt.Sprintf("%s:%s/%s", nsFGATypeName, ai.Spec.Account.GeneratedClusterId, *rctx.Resource.Namespace)
+		nsObject = fgamodel.BuildObjectNameFromType(nsFGATypeName, ai.Spec.Account.GeneratedClusterId, *rctx.Resource.Namespace, nil)
 
 		// Add namespace contextual tuple
 		namespaceTuple := &openfgav1.TupleKey{

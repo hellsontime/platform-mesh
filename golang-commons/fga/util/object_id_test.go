@@ -32,6 +32,7 @@ func TestEncodeObjectIDPart(t *testing.T) {
 		{name: "allowed punctuation", input: "name?with@punctuation", want: "name?with@punctuation"},
 		{name: "unicode", input: "münchen", want: "münchen"},
 		{name: "colon", input: "system:controller:foo", want: "system%3Acontroller%3Afoo"},
+		{name: "slash", input: "ns1/foo", want: "ns1%2Ffoo"},
 		{name: "hash", input: "name#fragment", want: "name%23fragment"},
 		{name: "space", input: "name with space", want: "name%20with%20space"},
 		{name: "ascii controls", input: "tab\tline\n", want: "tab%09line%0A"},
@@ -51,6 +52,7 @@ func TestEncodeObjectIDPart(t *testing.T) {
 
 func FuzzEncodeObjectIDPartIsInjective(f *testing.F) {
 	f.Add("system:controller:foo", "system.controller.foo")
+	f.Add("ns1/foo", "ns1%2Ffoo")
 	f.Add("name#fragment", "name%23fragment")
 	f.Add("name with space", "name%20with%20space")
 	f.Add("line\nfeed", "line%0Afeed")
@@ -64,7 +66,7 @@ func FuzzEncodeObjectIDPartIsInjective(f *testing.F) {
 		}
 
 		for _, r := range encodedFirst {
-			if r == ':' || r == '#' || r == ' ' || unicode.IsControl(r) {
+			if r == ':' || r == '#' || r == '/' || r == ' ' || unicode.IsControl(r) {
 				t.Fatalf("EncodeObjectIDPart(%q) = %q contains OpenFGA-forbidden rune %q", first, encodedFirst, r)
 			}
 		}
