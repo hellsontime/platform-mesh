@@ -42,9 +42,10 @@ Query params:
 
 If both `page` and `cursor` are provided, cursor-based pagination takes precedence.
 
-Page-based pagination scans and authorizes preceding hits, so it is bounded by
-`MaxScannedHits / limit` (1000 scanned hits by default). Requests beyond that bound are rejected; use cursor-based
-pagination for deep traversal.
+Before querying OpenSearch, the service resolves the accounts the caller can access with OpenFGA `ListObjects` and
+adds those exact account objects as an internal `filterable_fields.account_fga_object` filter. OpenSearch therefore
+returns the page-based `totalCount` directly for the caller's accessible account scope. Returned hits are still
+batch-checked with OpenFGA as a defense in depth measure.
 
 Semantic mode behavior:
 
@@ -66,8 +67,9 @@ Response shape:
 - `results[]` with compact fields (`id`, `score`, `kind`, `name`, `namespace`, `apiGroup`, `apiVersion`, `workspacePath`, `clusterName`, `organizationId`, `organizationName`, `accountId`, `accountName`)
 - `results[].resource` indicates which resource index produced the hit
 - `source` containing the indexed document source per hit, including `default_fields`, `semantic_fields`, and `filterable_fields`
-- `nextCursor` for sequential continuation. It can also be returned for a page-based request; pass it as `cursor`
-  (without `page`) to continue after that page.
+- `nextCursor` for cursor-based sequential continuation; omitted for page-based requests
+- `totalCount` with the exact number of OpenSearch matches after account authorization pre-filtering for page-based
+  requests; omitted for cursor-based requests
 
 ### Resource metadata endpoint
 
@@ -117,23 +119,27 @@ Use `--is-local=true` for local development to match the local behavior of `kube
 
 When enabled:
 
-- org context is still derived from host (`localhost` is mapped to `--local-development-org`)
-- JWT claims are still parsed for user/tenant context
-- kcp org token validation (`ValidateTokenForOrg`) is bypassed
+- org context is set to `--local-development-org`
+- JWT claims are parsed for user/tenant context
+- kcp JWT validation is bypassed
 
-This is intended for local/dev usage only. Keep `--is-local=false` for production-like environments.
+This is intended for local/dev usage only. Tokens are not signature- or claims-validated in this mode. Keep `--is-local=false` for production-like environments.
 
 ### Configuration flags
 
 Main runtime flags (with defaults):
 
 - `--port` (default: `8080`)
+- `--user-claim` (default: `email`) JWT claim used as the OpenFGA user; must match the Security Operator setting
 - `--opensearch-url` (default: `http://opensearch.platform-mesh-system.svc.cluster.local:9200`)
 - `--opensearch-username` (default: value of env `OPENSEARCH_USERNAME`)
 - `--opensearch-password` (default: value of env `OPENSEARCH_PASSWORD`)
 - `--opensearch-insecure` (default: `false`)
 - `--opensearch-timeout` (default: `10s`)
 - `--openfga-grpc-addr` (default: `openfga:8081`)
+- `--openfga-object-type` (default: `core_platform-mesh_io_account`)
+- `--openfga-default-role` (default: `member`)
+- `--batch-size` (default: `50`)
 - `--searchindex-workspace-path` (default: `root:providers:search`)
 - `--searchindex-org-workspace-path` (default: `root:orgs`)
 - `--searchindex-group` (default: `search.platform-mesh.io`)
@@ -143,8 +149,8 @@ Main runtime flags (with defaults):
 - `--search-max-limit` (default: `100`)
 - `--search-fetch-batch-size` (default: `100`)
 - `--search-max-scanned-hits` (default: `1000`)
-- `--is-local` (default: `false`) enables local development behavior in auth middleware
-- `--local-development-org` (default: env `SEARCH_LOCAL_ORG`, fallback `local`) org used when host is `localhost`
+- `--is-local` (default: `false`) uses the configured local organization and bypasses kcp JWT validation
+- `--local-development-org` (default: env `SEARCH_LOCAL_ORG`, fallback `local`) org used when `--is-local=true`
 
 Global flags from `golang-commons` are also available (e.g. logging and kubeconfig related flags).
 
@@ -156,8 +162,11 @@ go test ./...
 
 ## Security Notes
 
-- JWT signature validation is expected to happen upstream (gateway/mesh).
-- The service consumes parsed claims from context (`mail`, fallback `sub`).
+- With `--is-local=false`, every search API request requires a valid bearer JWT. Missing, malformed, expired, or otherwise invalid tokens return `401 Unauthorized`.
+- JWT signature and standard claims validation is delegated to the target organization's kcp authentication configuration. A kcp `403 Forbidden` response still proves that authentication succeeded; result authorization remains enforced by OpenFGA.
+- The service uses the exact JWT claim configured by `--user-claim` as the OpenFGA user and rejects requests when that claim is missing, blank, or not a string.
+- `--user-claim` must match the Security Operator setting so Search and Kubernetes authorization identify the caller consistently.
+- With `--is-local=true`, the service only parses JWT claims and intentionally skips kcp validation. Never enable this mode in production.
 - Search hits missing required authorization hierarchy fields are dropped (fail-closed).
 
 ## Releasing

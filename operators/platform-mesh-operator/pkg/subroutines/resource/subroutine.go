@@ -29,7 +29,7 @@ import (
 	"go.platform-mesh.io/golang-commons/logger"
 	"go.platform-mesh.io/platform-mesh-operator/internal/config"
 	"go.platform-mesh.io/platform-mesh-operator/internal/metrics"
-	"go.platform-mesh.io/platform-mesh-operator/pkg/ocm"
+	"go.platform-mesh.io/platform-mesh-operator/internal/ociref"
 	"go.platform-mesh.io/platform-mesh-operator/pkg/subroutines"
 	subroutineslib "go.platform-mesh.io/subroutines"
 
@@ -334,6 +334,12 @@ func (r *ResourceSubroutine) updateHelmReleaseImage(ctx context.Context, inst *u
 	}
 	if getMetadataValue(inst, "unsuspend") == "true" {
 		r.storeUnsuspended(namespace, name)
+		log.Info().
+			Str("helmRelease", name).
+			Str("namespace", namespace).
+			Str("resource", inst.GetName()).
+			Str("version", version).
+			Msg("Image injection complete - HelmRelease unsuspended and ready for reconciliation")
 	}
 	return subroutineslib.OK(), nil
 }
@@ -428,7 +434,7 @@ func (r *ResourceSubroutine) resolveArgoCDSource(inst *unstructured.Unstructured
 		return "", "", "", fmt.Errorf("no helmRepository, repoUrl, or imageReference found")
 	}
 
-	repoURL, err = extractOCIRepoURL(imageRef)
+	repoURL, err = ociref.ExtractRepoURL(imageRef)
 	if err != nil {
 		return "", "", "", err
 	}
@@ -438,16 +444,6 @@ func (r *ResourceSubroutine) resolveArgoCDSource(inst *unstructured.Unstructured
 		return "", "", "", fmt.Errorf("version not found for OCI chart")
 	}
 	return repoURL, version, "oci", nil
-}
-
-func extractOCIRepoURL(imageRef string) (string, error) {
-	imageRef = strings.TrimPrefix(imageRef, "oci://")
-	baseURL := strings.Split(imageRef, ":")[0]
-	lastSlash := strings.LastIndex(baseURL, "/")
-	if lastSlash == -1 {
-		return "", fmt.Errorf("invalid imageReference format: %s", imageRef)
-	}
-	return baseURL[:lastSlash], nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -679,18 +675,11 @@ func (r *ResourceSubroutine) updateOciRepo(ctx context.Context, inst *unstructur
 		return subroutineslib.OK(), err
 	}
 
-	url = strings.TrimPrefix(url, "oci://")
-
-	url = "oci://" + url
-	url = strings.TrimSuffix(url, ":"+version)
-
-	spec, err := ocm.ParseRef(url)
+	url, err = ociref.NormalizeOCIURL(url, version)
 	if err != nil {
 		log.Error().Err(err).Str("url", url).Msg("Failed to parse Resource url")
 		return subroutineslib.OK(), err
 	}
-
-	url = fmt.Sprintf("%s://%s/%s", spec.Scheme, spec.Host, spec.Repository)
 
 	// Update or create oci repo
 	log.Info().Msg("Processing OCI Chart Resource")

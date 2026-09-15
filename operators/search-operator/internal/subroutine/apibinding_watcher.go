@@ -56,7 +56,7 @@ type apiBindingWatcherSubroutine struct {
 // orgsClient must be scoped to the root:orgs workspace.
 // searchConfigClient must be scoped to the provider workspace.
 // localCfg must be the admin kcp REST config.
-func NewAPIBindingWatcherSubroutine(mgr mcmanager.Manager, orgsClient ctrlruntimeclient.Client, localCfg *rest.Config, indexPrefix string, cfg config.Config) (lifecyclesubroutine.Subroutine, error) {
+func NewAPIBindingWatcherSubroutine(mgr mcmanager.Manager, orgsClient ctrlruntimeclient.Client, localCfg *rest.Config, indexPrefix string, cfg config.OperatorConfig) (lifecyclesubroutine.Subroutine, error) {
 	rootCfg, err := stripPathFromConfig(localCfg)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func (s *apiBindingWatcherSubroutine) Process(ctx context.Context, instance runt
 	orgClusterID, err := getOrgClusterID(ctx, s.orgsClient, orgName)
 	if err != nil {
 		log.Debug().Err(err).Str("orgName", orgName).Msg("org Workspace not found, requeuing")
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	}
 
 	for _, b := range otherBindings.Items {

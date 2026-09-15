@@ -18,7 +18,6 @@ package subroutines
 
 import (
 	"context"
-	"fmt"
 	"path/filepath"
 	"time"
 
@@ -146,6 +145,11 @@ func (r *FeatureToggleSubroutine) Process(ctx context.Context, runtimeObj ctrlru
 			log.Info().Msg("Enabled 'Provider permissions' feature")
 		case "feature-disable-email-verification":
 			log.Info().Msg("Enabled 'disable-email-verification' feature")
+		case "feature-disable-idp-webhook":
+			// This feature toggle should only be used intentionally for testing/development or for disaster recovery.
+			// The IDP validating webhook provides important security validation for IdentityProviderConfiguration resources.
+			// Production deployments should run with this webhook enabled (default behavior).
+			log.Info().Msg("IDP validating webhook is disabled")
 		default:
 			log.Warn().Str("featureToggle", ft.Name).Msg("Unknown feature toggle")
 		}
@@ -174,14 +178,10 @@ func (r *FeatureToggleSubroutine) applyKcpManifests(
 
 	dir := r.workspaceDirectory + kcpDir
 
-	baseDomain, baseDomainPort, port, protocol := baseDomainPortProtocol(inst)
-	tplValues := map[string]any{
-		"baseDomain":     baseDomain,
-		"protocol":       protocol,
-		"port":           fmt.Sprintf("%d", port),
-		"baseDomainPort": baseDomainPort,
+	tplValues := make(map[string]any)
+	for k, v := range getExposureParams(inst).templateVars(operatorCfg.KCP) {
+		tplValues[k] = v
 	}
-
 	err = ApplyDirStructure(ctx, dir, "root", cfg, tplValues, inst, r.kcpHelper)
 	if err != nil {
 		log.Err(err).Msg("Failed to apply dir structure")
