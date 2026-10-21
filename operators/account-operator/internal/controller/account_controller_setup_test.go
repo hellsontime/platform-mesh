@@ -168,10 +168,11 @@ func (s *AccountTestSuite) setupKCP() {
 	} {
 		var workspaceType kcptenancyv1alpha1.WorkspaceType
 		s.Require().NoError(yaml.Unmarshal(workspaceTypeYAML, &workspaceType))
-		err = rootClient.Create(s.ctx, &workspaceType)
-		if err != nil && !apierrors.IsAlreadyExists(err) {
-			s.Require().NoError(err)
-		}
+		// The bind permission check can lag behind the new APIExport when it is on another shard.
+		s.Require().Eventually(func() bool {
+			err := rootClient.Create(s.ctx, workspaceType.DeepCopy())
+			return err == nil || apierrors.IsAlreadyExists(err)
+		}, 30*time.Second, 500*time.Millisecond, "WorkspaceType %s should be created", workspaceType.Name)
 		s.logger.Info().Msgf("Created WorkspaceType '%s' in root workspace", workspaceType.Name)
 	}
 

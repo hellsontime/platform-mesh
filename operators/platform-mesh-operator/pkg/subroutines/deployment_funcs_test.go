@@ -780,7 +780,7 @@ components:
 `
 	sub, inst := s.newSubroutineWithProfile(profileYAML, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	values, ok := result["values"].(map[string]any)
@@ -795,7 +795,7 @@ components:
 func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_ReleaseNamespace() {
 	sub, inst := s.newSubroutineWithProfile(minimalProfileYAML, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	s.Equal("test-ns", result["releaseNamespace"])
@@ -820,7 +820,7 @@ components:
 	s.Require().NoError(err)
 	inst.Spec.Values = apiextensionsv1.JSON{Raw: raw}
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	values, ok := result["values"].(map[string]any)
@@ -835,7 +835,7 @@ components:
 func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_DeploymentTechnologyDefault() {
 	sub, inst := s.newSubroutineWithProfile(minimalProfileYAML, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	s.Equal("fluxcd", result["deploymentTechnology"])
@@ -845,7 +845,7 @@ func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_DeploymentTechn
 	sub, inst := s.newSubroutineWithProfile(minimalProfileYAML, config.RemoteClusterConfig{})
 
 	templateVars := apiextensionsv1.JSON{Raw: []byte(`{"deploymentTechnology":"argocd"}`)}
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, templateVars)
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, templateVars)
 
 	s.Require().NoError(err)
 	s.Equal("argocd", result["deploymentTechnology"])
@@ -855,7 +855,7 @@ func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_DeploymentTechn
 	sub, inst := s.newSubroutineWithProfile(minimalProfileYAML, config.RemoteClusterConfig{})
 
 	templateVars := apiextensionsv1.JSON{Raw: []byte(`{"deploymentTechnology":"helm"}`)}
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, templateVars)
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, templateVars)
 
 	s.Require().NoError(err)
 	s.Equal("fluxcd", result["deploymentTechnology"])
@@ -869,7 +869,7 @@ func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_KubeConfigEnabl
 	}
 	sub, inst := s.newSubroutineWithProfile(minimalProfileYAML, remoteRuntime)
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	s.Equal(true, result["kubeConfigEnabled"])
@@ -884,7 +884,7 @@ func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_BaseDomainField
 		Port:       8443,
 	}
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
 	s.Equal("my.domain.com", result["baseDomain"])
@@ -898,12 +898,12 @@ func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_BaseDomainWithD
 		BaseDomain: "my.domain.com",
 	}
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 
 	s.Require().NoError(err)
-	s.Equal("443", result["port"])
-	// When port is 443, baseDomainWithPort should equal baseDomain
-	s.Equal("my.domain.com", result["baseDomainWithPort"])
+	s.Equal("8443", result["port"])
+	// When port is 8443 (non-standard), baseDomainWithPort includes the port
+	s.Equal("my.domain.com:8443", result["baseDomainWithPort"])
 }
 
 // ---- loadProfileSections tests ----

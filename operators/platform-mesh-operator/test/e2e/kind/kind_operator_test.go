@@ -19,7 +19,6 @@ limitations under the License.
 package e2e
 
 import (
-	"context"
 	"fmt"
 	"testing"
 	"time"
@@ -38,9 +37,9 @@ func TestKindSuite(t *testing.T) {
 }
 
 func (s *KindTestSuite) Test01ResourceReady() {
-	ctx := context.TODO()
+	ctx := s.T().Context()
 
-	s.Eventually(func() bool {
+	ok := s.Eventually(func() bool {
 		pm := pmcorev1alpha1.PlatformMesh{}
 		err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{
 			Name:      "platform-mesh",
@@ -58,11 +57,16 @@ func (s *KindTestSuite) Test01ResourceReady() {
 			}
 		}
 		return false
-	}, 25*time.Minute, 10*time.Second)
+	}, 30*time.Minute, 10*time.Second)
+
+	if !ok {
+		s.dumpDiagnostics(ctx)
+		s.Fail("PlatformMesh resource did not become ready within 30 minutes")
+	}
 }
 
 func (s *KindTestSuite) Test02ExtraWorkspaces() {
-	ctx := context.TODO()
+	ctx := s.T().Context()
 
 	pm := pmcorev1alpha1.PlatformMesh{}
 	err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{
@@ -92,7 +96,7 @@ func (s *KindTestSuite) Test02ExtraWorkspaces() {
 	err = s.client.Update(ctx, &pm)
 	s.Assert().NoError(err, "Failed to update Platform Mesh resource")
 
-	s.Eventually(func() bool {
+	ok := s.Eventually(func() bool {
 		updatedPM := pmcorev1alpha1.PlatformMesh{}
 		err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{
 			Name:      "platform-mesh",
@@ -124,4 +128,9 @@ func (s *KindTestSuite) Test02ExtraWorkspaces() {
 		s.logger.Info().Msg("PlatformMesh resource is ready and extra1-kubeconfig secret exists")
 		return true
 	}, 20*time.Minute, 10*time.Second)
+
+	if !ok {
+		s.dumpDiagnostics(ctx)
+		s.Fail("PlatformMesh resource did not become ready with extra workspace within 20 minutes")
+	}
 }

@@ -29,6 +29,8 @@ import (
 	"go.platform-mesh.io/golang-commons/logger"
 	"go.platform-mesh.io/platform-mesh-operator/internal/config"
 	"go.platform-mesh.io/platform-mesh-operator/pkg/subroutines/mocks"
+	"go.platform-mesh.io/subroutines/conditions"
+	"go.platform-mesh.io/subroutines/lifecycle"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -37,6 +39,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrlruntimeclient "sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/cluster"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
+	mcreconcile "sigs.k8s.io/multicluster-runtime/pkg/reconcile"
 )
 
 type ProviderResourceTestSuite struct {
@@ -220,6 +227,56 @@ func (s *ProviderResourceTestSuite) TestProcess_CustomProviderReference() {
 	s.Require().NoError(err)
 	s.Assert().True(result.IsContinue())
 	s.kcpHelperMock.AssertExpectations(s.T())
+}
+
+type fakeManager struct {
+	mcmanager.Manager
+	client ctrlruntimeclient.Client
+}
+
+func (m *fakeManager) ClusterFromContext(context.Context) (cluster.Cluster, error) {
+	return &fakeCluster{client: m.client}, nil
+}
+
+type fakeCluster struct {
+	cluster.Cluster
+	client ctrlruntimeclient.Client
+}
+
+func (c *fakeCluster) GetClient() ctrlruntimeclient.Client { return c.client }
+
+func (s *ProviderResourceTestSuite) TestReconcile_Delete() {
+	s.Run("ManagedProvider deleted after cleanupOnDelete is disabled", func() {
+		ctx := s.newCtx()
+		scheme := runtime.NewScheme()
+		s.Require().NoError(pmprovidersv1alpha1.AddToScheme(scheme))
+
+		inst := s.newManagedProvider()
+		inst.Spec.CleanupOnDelete = true
+		cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(inst).WithStatusSubresource(inst).Build()
+
+		lc := lifecycle.New(&fakeManager{client: cl}, "ManagedProviderReconciler", func() ctrlruntimeclient.Object {
+			return &pmprovidersv1alpha1.ManagedProvider{}
+		}, s.testObj).WithConditions(conditions.NewManager())
+		key := ctrlruntimeclient.ObjectKeyFromObject(inst)
+		req := mcreconcile.Request{Request: reconcile.Request{NamespacedName: key}}
+
+		_, err := lc.Reconcile(ctx, req)
+		s.Require().NoError(err)
+		s.Require().NoError(cl.Get(ctx, key, inst))
+		s.Require().Contains(inst.Finalizers, providerResourceFinalizer)
+
+		inst.Spec.CleanupOnDelete = false
+		s.Require().NoError(cl.Update(ctx, inst))
+		s.Require().NoError(cl.Delete(ctx, inst))
+
+		_, err = lc.Reconcile(ctx, req)
+		s.Require().NoError(err)
+
+		remaining := &pmprovidersv1alpha1.ManagedProvider{}
+		err = cl.Get(ctx, key, remaining)
+		s.Assert().Truef(apierrors.IsNotFound(err), "ManagedProvider stuck with finalizers: %v", remaining.Finalizers)
+	})
 }
 
 // --- Finalize ---

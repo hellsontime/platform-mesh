@@ -73,19 +73,34 @@ func componentSection(t *testing.T, profile map[string]any, section string) map[
 	return services
 }
 
-// disableComponent flips <section>.<component>.enabled to false, as an operator would.
-func disableComponent(t *testing.T, profileYAML, section, component string) string {
+// setComponentEnabled flips <section>.<component>.enabled, as an operator would.
+func setComponentEnabled(t *testing.T, profileYAML, section, component string, enabled bool) string {
 	t.Helper()
 	var profile map[string]any
 	require.NoError(t, yaml.Unmarshal([]byte(profileYAML), &profile))
 
 	cfg, ok := componentSection(t, profile, section)[component].(map[string]any)
 	require.True(t, ok, "%s.%s must exist in the shipped profile", section, component)
-	cfg["enabled"] = false
+	cfg["enabled"] = enabled
 
 	out, err := yaml.Marshal(profile)
 	require.NoError(t, err)
 	return string(out)
+}
+
+func disableComponent(t *testing.T, profileYAML, section, component string) string {
+	t.Helper()
+	return setComponentEnabled(t, profileYAML, section, component, false)
+}
+
+// withObservabilityStack enables the observability stack (otel operator, prometheus CRDs and the
+// observability release). The e2e profile ships it disabled so the kind suite fits on the default
+// CI runner, but the dependency gates around it still need to be exercised.
+func withObservabilityStack(t *testing.T, profileYAML string) string {
+	t.Helper()
+	profileYAML = setComponentEnabled(t, profileYAML, "infra", "prometheusOperatorCRDs", true)
+	profileYAML = setComponentEnabled(t, profileYAML, "infra", "opentelemetryOperator", true)
+	return setComponentEnabled(t, profileYAML, "components", "observability", true)
 }
 
 // componentNames lists every component in a section, so we can sweep all of them.
@@ -167,7 +182,7 @@ func renderHelmReleaseGraph(t *testing.T, sub *DeploymentSubroutine, inst *pmcor
 	}
 
 	// Component services: gotemplates/components/infra/helmreleases.yaml
-	componentVars, err := sub.buildComponentsTemplateVars(ctx, inst, apiextensionsv1.JSON{})
+	componentVars, _, err := sub.buildComponentsTemplateVars(ctx, inst, apiextensionsv1.JSON{})
 	require.NoError(t, err)
 	collect(filepath.Join("..", "..", "gotemplates", "components", "infra", "helmreleases.yaml"), componentVars)
 
@@ -187,16 +202,26 @@ func assertNoDanglingDependencies(t *testing.T, graph renderedGraph) {
 }
 
 func Test_ShippedProfile_HasNoDanglingDependencies(t *testing.T) {
-	sub, inst := newSubroutineForProfile(t, loadShippedProfile(t), platformMeshNamespace)
+	ns := platformMeshNamespace
+	shipped := loadShippedProfile(t)
+
+	sub, inst := newSubroutineForProfile(t, shipped, ns)
 	graph := renderHelmReleaseGraph(t, sub, inst)
 
 	require.NotEmpty(t, graph, "the shipped profile must render HelmReleases")
 	assertNoDanglingDependencies(t, graph)
+	assert.NotContains(t, graph, helmReleaseKey(ns, "observability"),
+		"the shipped profile keeps observability off so the e2e fits the default runner")
 
 	// The gates only pay off if the dependency survives while the target is enabled.
-	ns := platformMeshNamespace
-	assert.Contains(t, graph[helmReleaseKey(ns, "opentelemetry-operator")], helmReleaseKey(ns, "cert-manager"))
 	assert.Contains(t, graph[helmReleaseKey(ns, "traefik")], helmReleaseKey(ns, "traefik-crds"))
+
+	sub, inst = newSubroutineForProfile(t, withObservabilityStack(t, shipped), ns)
+	graph = renderHelmReleaseGraph(t, sub, inst)
+	assertNoDanglingDependencies(t, graph)
+	assert.Contains(t, graph[helmReleaseKey(ns, "opentelemetry-operator")], helmReleaseKey(ns, "cert-manager"))
+	assert.Contains(t, graph[helmReleaseKey(ns, "observability")], helmReleaseKey(ns, "opentelemetry-operator"))
+	assert.Contains(t, graph[helmReleaseKey(ns, "observability")], helmReleaseKey(ns, "prometheus-operator-crds"))
 }
 
 // Switching a component off must never leave another release waiting on it.
@@ -242,9 +267,13 @@ func Test_DisablingComponent_LeavesRemainingStackDeployable(t *testing.T) {
 		},
 	}
 
+	// Every scenario is about a stack that wants observability, which the shipped profile
+	// keeps off; switch it on first so the gates under test are actually rendered.
+	base := withObservabilityStack(t, loadShippedProfile(t))
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			profile := disableComponent(t, loadShippedProfile(t), tt.section, tt.component)
+			profile := disableComponent(t, base, tt.section, tt.component)
 			sub, inst := newSubroutineForProfile(t, profile, ns)
 			graph := renderHelmReleaseGraph(t, sub, inst)
 
@@ -270,15 +299,21 @@ func Test_DisablingComponent_LeavesRemainingStackDeployable(t *testing.T) {
 // The cases above are hand-picked; this sweeps every component in the profile, so anything
 // added later is covered without remembering to add a case.
 func Test_DisablingAnySingleComponent_LeavesNoDanglingDependencies(t *testing.T) {
-	profile := loadShippedProfile(t)
+	shipped := loadShippedProfile(t)
+	variants := map[string]string{
+		"shipped":            shipped,
+		"with-observability": withObservabilityStack(t, shipped),
+	}
 
-	for _, section := range []string{"infra", "components"} {
-		for _, component := range componentNames(t, profile, section) {
-			t.Run(section+"/"+component, func(t *testing.T) {
-				sub, inst := newSubroutineForProfile(t,
-					disableComponent(t, profile, section, component), platformMeshNamespace)
-				assertNoDanglingDependencies(t, renderHelmReleaseGraph(t, sub, inst))
-			})
+	for variant, profile := range variants {
+		for _, section := range []string{"infra", "components"} {
+			for _, component := range componentNames(t, profile, section) {
+				t.Run(variant+"/"+section+"/"+component, func(t *testing.T) {
+					sub, inst := newSubroutineForProfile(t,
+						disableComponent(t, profile, section, component), platformMeshNamespace)
+					assertNoDanglingDependencies(t, renderHelmReleaseGraph(t, sub, inst))
+				})
+			}
 		}
 	}
 }

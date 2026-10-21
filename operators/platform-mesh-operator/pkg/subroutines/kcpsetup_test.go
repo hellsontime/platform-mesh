@@ -136,7 +136,7 @@ func (s *KcpsetupTestSuite) Test_applyDirStructure() {
 			return nil
 		})
 
-	err := ApplyDirStructure(ctx, "../../manifests/kcp", "root", &rest.Config{}, inventory, &pmcorev1alpha1.PlatformMesh{}, s.helperMock)
+	err := ApplyDirStructure(ctx, "../../manifests/kcp", "root", &rest.Config{}, inventory, &pmcorev1alpha1.PlatformMesh{}, s.helperMock, nil)
 
 	s.Assert().Nil(err)
 }
@@ -207,7 +207,7 @@ func (s *KcpsetupTestSuite) Test_getCABundleInventory() {
 		})
 
 	// First call should fetch from secrets
-	inventory, err := s.testObj.GetCABundleInventory(ctx)
+	inventory, err := s.testObj.GetCABundleInventory(ctx, &pmcorev1alpha1.PlatformMesh{})
 	s.Assert().NoError(err)
 	s.Assert().NotNil(inventory)
 
@@ -228,7 +228,7 @@ func (s *KcpsetupTestSuite) Test_getCABundleInventory() {
 	s.Assert().Equal(expectedB64, inventory[ipdValidatingKey])
 
 	// Second call should use cache (no additional mock calls expected)
-	inventory2, err2 := s.testObj.GetCABundleInventory(ctx)
+	inventory2, err2 := s.testObj.GetCABundleInventory(ctx, &pmcorev1alpha1.PlatformMesh{})
 	s.Assert().NoError(err2)
 	s.Assert().NotNil(inventory2)
 	s.Assert().Contains(inventory2, mutatingKey)
@@ -253,7 +253,7 @@ func (s *KcpsetupTestSuite) Test_getCABundleInventory() {
 		Return(errors.New("secret not found")).
 		Once()
 
-	inventory, err = s.testObj.GetCABundleInventory(ctx)
+	inventory, err = s.testObj.GetCABundleInventory(ctx, &pmcorev1alpha1.PlatformMesh{})
 	s.Assert().Error(err)
 	s.Assert().Nil(inventory)
 	s.Assert().Contains(err.Error(), "Failed to get CA bundle")
@@ -328,7 +328,7 @@ func (s *KcpsetupTestSuite) Test_getCABundleInventory_CustomSecretNameAndKey() {
 			return nil
 		}).Once()
 
-	inventory, err := s.testObj.GetCABundleInventory(ctx)
+	inventory, err := s.testObj.GetCABundleInventory(ctx, &pmcorev1alpha1.PlatformMesh{})
 	s.Assert().NoError(err)
 	s.Assert().NotNil(inventory)
 	s.Assert().Contains(inventory, "domainCA")
@@ -651,6 +651,8 @@ users:
 }
 
 func (s *KcpsetupTestSuite) Test_getAPIExportHashInventory() {
+	ctx := s.T().Context()
+
 	// mocks
 	mockKcpClient := new(mocks.Client)
 	mockedKcpHelper := new(mocks.KcpHelper)
@@ -676,7 +678,7 @@ func (s *KcpsetupTestSuite) Test_getAPIExportHashInventory() {
 			return errors.New("error")
 		}).Once()
 
-	inventory, err := s.testObj.GetAPIExportHashInventory(context.TODO(), &rest.Config{})
+	inventory, err := s.testObj.GetAPIExportHashInventory(ctx, &rest.Config{})
 	s.Assert().Error(err)
 	s.Assert().Equal(map[string]string{
 		"apiExportRootTenancyKcpIoIdentityHash": "hash1",
@@ -697,7 +699,7 @@ func (s *KcpsetupTestSuite) Test_getAPIExportHashInventory() {
 			return errors.New("error")
 		}).Once()
 
-	inventory, err = s.testObj.GetAPIExportHashInventory(context.TODO(), &rest.Config{})
+	inventory, err = s.testObj.GetAPIExportHashInventory(ctx, &rest.Config{})
 	s.Assert().Error(err)
 	s.Assert().Equal(map[string]string{
 		"apiExportRootTenancyKcpIoIdentityHash": "hash1",
@@ -711,14 +713,14 @@ func (s *KcpsetupTestSuite) Test_getAPIExportHashInventory() {
 			return errors.New("error")
 		}).Once()
 
-	inventory, err = s.testObj.GetAPIExportHashInventory(context.TODO(), &rest.Config{})
+	inventory, err = s.testObj.GetAPIExportHashInventory(ctx, &rest.Config{})
 	s.Assert().Error(err)
 	s.Assert().Equal(map[string]string{}, inventory)
 
 	// test error 4
 	mockedKcpHelper.EXPECT().NewKcpClient(mock.Anything, mock.Anything).
 		Return(nil, errors.New("Error")).Once()
-	inventory, err = s.testObj.GetAPIExportHashInventory(context.TODO(), &rest.Config{})
+	inventory, err = s.testObj.GetAPIExportHashInventory(ctx, &rest.Config{})
 	s.Assert().Error(err)
 	s.Assert().Equal(map[string]string{}, inventory)
 }
@@ -1214,14 +1216,14 @@ func (s *KcpsetupTestSuite) Test_ApplyManifestFromFile_SkipsContentConfiguration
 			path := "../../manifests/kcp/01-platform-mesh-system/contentconfiguration-main-home.yaml"
 
 			if tc.expectSkipped {
-				err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+				err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 				s.Assert().NoError(err)
 				kcpClientMock.AssertNotCalled(s.T(), "Get", mock.Anything, mock.Anything, mock.Anything)
 				kcpClientMock.AssertNotCalled(s.T(), "Apply", mock.Anything, mock.Anything, mock.Anything, mock.Anything)
 			} else {
 				kcpClientMock.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-				err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+				err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 				s.Assert().NoError(err)
 			}
 		})
@@ -1243,6 +1245,6 @@ func (s *KcpsetupTestSuite) Test_ApplyManifestFromFile_DoesNotSkipNonContentConf
 	// Even with toggle enabled, non-ContentConfiguration files should be applied
 	kcpClientMock.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
 
-	err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root", &pmcorev1alpha1.PlatformMesh{})
+	err := ApplyManifestFromFile(ctx, path, kcpClientMock, templateData, "root", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().NoError(err)
 }

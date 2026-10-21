@@ -34,11 +34,3 @@ replace github.com/kcp-dev/multicluster-provider/client => github.com/kcp-dev/mu
 // See https://github.com/googleapis/go-genproto/issues/1015 for more information. This replace
 // can be removed if none of our dependencies require both the old and new modules.
 replace google.golang.org/genproto => google.golang.org/genproto v0.0.0-20230525234044-86246a831fb4
-
-// Requires change to be merged upstream
-replace github.com/kcp-dev/kcp-operator/sdk => github.com/ntnn/kcp-operator/sdk v0.8.1-0.20260807065629-b3aeb506baee
-
-// The deployer runs kcp-operator's controller groups in its own manager, so it
-// consumes the operator itself and not only its sdk. Both have to be the same
-// commit: the controllers compile against their own sdk revision.
-replace github.com/kcp-dev/kcp-operator => github.com/ntnn/kcp-operator v0.8.1-0.20260807065629-b3aeb506baee

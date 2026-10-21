@@ -246,12 +246,19 @@ func (r *DeploymentSubroutine) Process(ctx context.Context, runtimeObj ctrlrunti
 	deploymentTech = strings.ToLower(deploymentTech)
 
 	// Render and apply components infra templates (HelmReleases for services)
-	oErr = r.renderAndApplyComponentsInfraTemplates(ctx, inst, templateVars)
+	disabled, oErr := r.renderAndApplyComponentsInfraTemplates(ctx, inst, templateVars)
 	if oErr != nil {
 		log.Error().Err(oErr).Msg("Failed to render and apply components infra templates")
 		return subroutines.OK(), oErr
 	}
 	log.Debug().Msg("Successfully rendered and applied components infra templates")
+
+	// delete only disabled HelmReleases
+	oErr = deleteHelmReleases(ctx, r.clientInfra, disabled, log)
+	if oErr != nil {
+		log.Error().Err(oErr).Msg("Failed to delete HelmReleases")
+		return subroutines.OK(), oErr
+	}
 
 	for _, crd := range []string{"issuers.cert-manager.io", "certificates.cert-manager.io"} {
 		established, err := isCRDEstablished(ctx, r.clientRuntime, crd)
@@ -264,7 +271,7 @@ func (r *DeploymentSubroutine) Process(ctx context.Context, runtimeObj ctrlrunti
 		}
 	}
 
-	_, oErr = r.manageAuthorizationWebhookSecrets(ctx, inst)
+	webhookResult, oErr := r.manageAuthorizationWebhookSecrets(ctx, inst)
 	if oErr != nil {
 		log.Info().Msg("Failed to manage authorization webhook secrets")
 		return subroutines.OK(), oErr
@@ -332,7 +339,7 @@ func (r *DeploymentSubroutine) Process(ctx context.Context, runtimeObj ctrlrunti
 	if err != nil || !matchesConditionWithStatus(frontProxy, "Available", "True") {
 		return subroutines.StopWithRequeue(DefaultRequeueInterval, "FrontProxy is not ready"), nil
 	}
-	return subroutines.OK(), nil
+	return webhookResult, nil
 }
 
 // templateVarsFromProfileInfra parses the infra profile and merges it with templateVars for rendering gotemplates/infra
@@ -392,6 +399,21 @@ func (r *DeploymentSubroutine) templateVarsFromProfileInfra(ctx context.Context,
 
 	// Ensure helmReleaseNamespace is set: prefer deploymentNamespace, then existing helmReleaseNamespace, then inst.Namespace
 	tmplVars["helmReleaseNamespace"] = infraHelmReleaseNamespace(tmplVars, inst.Namespace)
+
+	// Inject exposure-derived vars so the infra profile can use {{ .traefikClusterIP }} etc.
+	for k, v := range getExposureParams(inst).templateVars(r.cfgOperator.KCP) {
+		tmplVars[k] = v
+	}
+
+	// Render any {{ }} template syntax embedded in profile values (e.g. service.spec.clusterIP)
+	// using the now-complete tmplVars as data.
+	rendered, err := renderTemplatesInValue(tmplVars, tmplVars)
+	if err != nil {
+		return nil, errors.Wrap(err, "Failed to render template vars in infra profile")
+	}
+	if renderedMap, ok := rendered.(map[string]any); ok {
+		tmplVars = renderedMap
+	}
 
 	return tmplVars, nil
 }
@@ -528,32 +550,36 @@ func (r *DeploymentSubroutine) buildRuntimeTemplateVars(ctx context.Context, ins
 
 // buildComponentsTemplateVars parses components profile using TemplateVars and produces the data
 // structure expected by gotemplates/components (root keys: values, releaseNamespace).
-func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh, templateVars apiextensionsv1.JSON) (map[string]any, error) {
+// The second return value is the set of HelmRelease keys ("namespace/name") that are disabled and meant to be removed.
+func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh, templateVars apiextensionsv1.JSON) (map[string]any, map[string]struct{}, error) {
 	log := logger.LoadLoggerFromContext(ctx).ChildLogger("subroutine", r.GetName())
 
 	// The infra section is needed too: services may depend on infra HelmReleases, which
 	// carry their own enabled flags.
 	infraProfileYaml, componentsProfileYaml, err := r.loadProfileSections(ctx, inst)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to load profile from ConfigMap")
+		return nil, nil, errors.Wrap(err, "Failed to load profile from ConfigMap")
 	}
 
 	// Parse components profile as YAML to get the base structure
 	var componentsProfileMap map[string]any
 	if err := yaml.Unmarshal([]byte(componentsProfileYaml), &componentsProfileMap); err != nil {
-		return nil, errors.Wrap(err, "Failed to parse components profile as YAML")
+		return nil, nil, errors.Wrap(err, "Failed to parse components profile as YAML")
 	}
 
 	var infraProfileMap map[string]any
 	if err := yaml.Unmarshal([]byte(infraProfileYaml), &infraProfileMap); err != nil {
-		return nil, errors.Wrap(err, "Failed to parse infra profile as YAML")
+		return nil, nil, errors.Wrap(err, "Failed to parse infra profile as YAML")
 	}
+
+	exposure := getExposureParams(inst)
+	exposureTemplateVars := exposure.templateVars(r.cfgOperator.KCP)
 
 	// Parse templateVars JSON into a map
 	var templateVarsMap map[string]any
 	if len(templateVars.Raw) > 0 {
 		if err := json.Unmarshal(templateVars.Raw, &templateVarsMap); err != nil {
-			return nil, errors.Wrap(err, "Failed to unmarshal templateVars for components profile")
+			return nil, nil, errors.Wrap(err, "Failed to unmarshal templateVars for components profile")
 		}
 	} else {
 		templateVarsMap = make(map[string]any)
@@ -564,7 +590,7 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 	// keys leak into the infra resolution.
 	infraVars, err := merge.MergeMaps(infraProfileMap, templateVarsMap, log)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to merge infra profile with templateVars")
+		return nil, nil, errors.Wrap(err, "Failed to merge infra profile with templateVars")
 	}
 	infraNamespace := infraHelmReleaseNamespace(infraVars, inst.Namespace)
 
@@ -572,27 +598,36 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 	// templateVars take precedence over profile values
 	templateVarsMap, err = merge.MergeMaps(componentsProfileMap, templateVarsMap, log)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to merge profile-components.yaml with templateVars")
+		return nil, nil, errors.Wrap(err, "Failed to merge profile-components.yaml with templateVars")
+	}
+
+	// Inject exposure-derived vars so profile templates like {{ .traefikClusterIP }} render correctly.
+	// These are added after the templateVars merge so they can't be overridden by the profile config,
+	// but they are available when the profile YAML itself is rendered as a template.
+	{
+		for k, v := range exposureTemplateVars {
+			templateVarsMap[k] = v
+		}
 	}
 
 	// Render profile-components.yaml as a Go template with tv directly (merged values)
 	// Templates can use {{ .baseDomain }} instead of {{ .Values.baseDomain }}
 	tmpl, err := template.New("profile-components").Funcs(templateFuncMap()).Parse(componentsProfileYaml)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to parse profile-components.yaml template")
+		return nil, nil, errors.Wrap(err, "Failed to parse profile-components.yaml template")
 	}
 
 	var buf bytes.Buffer
 	// Render profile-components.yaml template with tv directly (not wrapped in Values)
 	// This allows templates to use {{ .baseDomain }} instead of {{ .Values.baseDomain }}
 	if err := tmpl.Execute(&buf, templateVarsMap); err != nil {
-		return nil, errors.Wrap(err, "Failed to execute profile-components.yaml template")
+		return nil, nil, errors.Wrap(err, "Failed to execute profile-components.yaml template")
 	}
 
 	// Now parse the rendered YAML into a generic values map
 	values := map[string]any{}
 	if err := yaml.Unmarshal(buf.Bytes(), &values); err != nil {
-		return nil, errors.Wrap(err, "Failed to unmarshal rendered profile-components.yaml")
+		return nil, nil, errors.Wrap(err, "Failed to unmarshal rendered profile-components.yaml")
 	}
 
 	// Extract services from the rendered profile-components.yaml
@@ -605,19 +640,10 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 
 	// Build template data for rendering templates in spec.Values
 	templateData := make(map[string]any)
-	_, baseDomainPort, _, _ := baseDomainPortProtocol(inst)
-
-	templateData["baseDomain"] = getBaseDomainFromInstance(inst)
-	templateData["baseDomainPort"] = baseDomainPort
-	templateData["port"] = "443"
-	if inst.Spec.Exposure != nil && inst.Spec.Exposure.Port != 0 {
-		templateData["port"] = fmt.Sprintf("%d", inst.Spec.Exposure.Port)
+	for k, v := range exposureTemplateVars {
+		templateData[k] = v
 	}
-	if templateData["port"] != "443" {
-		templateData["baseDomainWithPort"] = fmt.Sprintf("%s:%s", templateData["baseDomain"], templateData["port"])
-	} else {
-		templateData["baseDomainWithPort"] = templateData["baseDomain"]
-	}
+	templateData["baseDomainWithPort"] = exposure.baseDomainWithPort()
 
 	// Extract services from PlatformMesh.spec.Values
 	// spec.Values can either have services under a "services" key, or the entire spec.Values can be services
@@ -625,7 +651,7 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 	if len(inst.Spec.Values.Raw) > 0 {
 		var specValues map[string]any
 		if err := json.Unmarshal(inst.Spec.Values.Raw, &specValues); err != nil {
-			return nil, errors.Wrap(err, "Failed to parse PlatformMesh.spec.Values")
+			return nil, nil, errors.Wrap(err, "Failed to parse PlatformMesh.spec.Values")
 		}
 		// Check if services are under a "services" key
 		if services, ok := specValues["services"].(map[string]any); ok {
@@ -647,7 +673,7 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 		}
 		renderedServices, err := renderTemplatesInValue(specServices, wrappedTemplateData)
 		if err != nil {
-			return nil, errors.Wrap(err, "Failed to render templates in PlatformMesh.spec.Values services")
+			return nil, nil, errors.Wrap(err, "Failed to render templates in PlatformMesh.spec.Values services")
 		}
 		if renderedMap, ok := renderedServices.(map[string]any); ok {
 			specServices = renderedMap
@@ -657,7 +683,7 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 	// Deep merge specServices into baseServices (specServices takes precedence)
 	mergedServices, err := merge.MergeMaps(baseServices, specServices, log)
 	if err != nil {
-		return nil, errors.Wrap(err, "Failed to merge services from PlatformMesh.spec.Values with profile-components.yaml services")
+		return nil, nil, errors.Wrap(err, "Failed to merge services from PlatformMesh.spec.Values with profile-components.yaml services")
 	}
 
 	// deploymentNamespace: where deployment CRs live (configurable via profile)
@@ -716,26 +742,12 @@ func (r *DeploymentSubroutine) buildComponentsTemplateVars(ctx context.Context, 
 		data["destinationServer"] = destinationServer
 	}
 
-	data["baseDomain"] = getBaseDomainFromInstance(inst)
-	data["port"] = "443"
-	if inst.Spec.Exposure != nil && inst.Spec.Exposure.Port != 0 {
-		data["port"] = fmt.Sprintf("%d", inst.Spec.Exposure.Port)
+	for k, v := range exposureTemplateVars {
+		data[k] = v
 	}
-	if data["port"] != "443" {
-		data["baseDomainWithPort"] = fmt.Sprintf("%s:%s", data["baseDomain"], data["port"])
-	} else {
-		data["baseDomainWithPort"] = data["baseDomain"]
-	}
+	data["baseDomainWithPort"] = exposure.baseDomainWithPort()
 
-	return data, nil
-}
-
-// getBaseDomainFromInstance extracts the base domain from PlatformMesh instance
-func getBaseDomainFromInstance(inst *pmcorev1alpha1.PlatformMesh) string {
-	if inst.Spec.Exposure == nil || inst.Spec.Exposure.BaseDomain == "" {
-		return "portal.localhost"
-	}
-	return inst.Spec.Exposure.BaseDomain
+	return data, disabled, nil
 }
 
 // calculateSyncWaves calculates ArgoCD sync waves based on dependsOn relationships
@@ -1104,13 +1116,13 @@ func (r *DeploymentSubroutine) renderAndApplyRuntimeTemplates(ctx context.Contex
 
 // renderAndApplyComponentsInfraTemplates renders gotemplates/components/infra with profile-components.yaml
 // and applies the resulting manifests to the infra cluster.
-func (r *DeploymentSubroutine) renderAndApplyComponentsInfraTemplates(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh, templateVars apiextensionsv1.JSON) error {
+func (r *DeploymentSubroutine) renderAndApplyComponentsInfraTemplates(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh, templateVars apiextensionsv1.JSON) (map[string]struct{}, error) {
 	log := logger.LoadLoggerFromContext(ctx).ChildLogger("subroutine", r.GetName())
 
-	tmplVars, err := r.buildComponentsTemplateVars(ctx, inst, templateVars)
+	tmplVars, disabled, err := r.buildComponentsTemplateVars(ctx, inst, templateVars)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build components template data for infra")
-		return err
+		return nil, err
 	}
 
 	deploymentTech, _ := tmplVars["deploymentTechnology"].(string)
@@ -1119,7 +1131,7 @@ func (r *DeploymentSubroutine) renderAndApplyComponentsInfraTemplates(ctx contex
 	skipFile := deploymentTechFileFilter(deploymentTech, log)
 	postProcess := r.infraManifestPostProcess(ctx, log)
 
-	return r.renderAndApplyTemplates(ctx, r.gotemplatesComponentsDir+"/infra", tmplVars, r.clientInfra, log, "components-infra", skipFile, postProcess)
+	return disabled, r.renderAndApplyTemplates(ctx, r.gotemplatesComponentsDir+"/infra", tmplVars, r.clientInfra, log, "components-infra", skipFile, postProcess)
 }
 
 // renderAndApplyComponentsRuntimeTemplates renders gotemplates/components/runtime with profile-components.yaml
@@ -1127,7 +1139,7 @@ func (r *DeploymentSubroutine) renderAndApplyComponentsInfraTemplates(ctx contex
 func (r *DeploymentSubroutine) renderAndApplyComponentsRuntimeTemplates(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh, templateVars apiextensionsv1.JSON) error {
 	log := logger.LoadLoggerFromContext(ctx).ChildLogger("subroutine", r.GetName())
 
-	tmplVars, err := r.buildComponentsTemplateVars(ctx, inst, templateVars)
+	tmplVars, _, err := r.buildComponentsTemplateVars(ctx, inst, templateVars)
 	if err != nil {
 		log.Error().Err(err).Msg("Failed to build components template data for runtime")
 		return err
@@ -1202,7 +1214,7 @@ func (r *DeploymentSubroutine) updateKcpWebhookSecret(ctx context.Context, inst 
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			log.Info().Str("name", caSecretName).Msg("Webhook secret does not exist")
-			return subroutines.StopWithRequeue(DefaultRequeueInterval, "Webhook secret does not exist"), nil
+			return subroutines.OKWithRequeue(DefaultRequeueInterval), nil
 		}
 		log.Error().Err(err).Str("secret", caSecretName).Str("namespace", inst.Namespace).Msg("Failed to get webhook cert secret")
 		return subroutines.OK(), err
@@ -1213,6 +1225,14 @@ func (r *DeploymentSubroutine) updateKcpWebhookSecret(ctx context.Context, inst 
 		err := fmt.Errorf("ca.crt not found or empty in secret %s/%s", inst.Namespace, caSecretName)
 		log.Error().Err(err).Msg("ca.crt missing from webhook cert secret")
 		return subroutines.OK(), err
+	}
+
+	// A self-signed certificate is left over from before the CA issuer and is about to be
+	// reissued, so check again soon to sync the new CA.
+	issuedResult := subroutines.OK()
+	if bytes.Equal(caCrt, webhookCertSecret.Data["tls.crt"]) {
+		log.Info().Str("name", caSecretName).Msg("Webhook certificate is not yet issued by the CA issuer")
+		issuedResult = subroutines.OKWithRequeue(DefaultRequeueInterval)
 	}
 
 	// Get the kcp-webhook-secret
@@ -1251,7 +1271,7 @@ func (r *DeploymentSubroutine) updateKcpWebhookSecret(ctx context.Context, inst 
 
 	if !updated {
 		log.Debug().Msg("certificate-authority-data is already up to date in kcp-webhook-secret, skipping update")
-		return subroutines.OK(), nil
+		return issuedResult, nil
 	}
 
 	// Marshal the updated kubeconfig back to YAML using clientcmd
@@ -1282,7 +1302,7 @@ func (r *DeploymentSubroutine) updateKcpWebhookSecret(ctx context.Context, inst 
 		return subroutines.OK(), oErr
 	}
 
-	return subroutines.OK(), nil
+	return issuedResult, nil
 }
 
 // deleteKcpPods deletes all pods with label app.kubernetes.io/name=kcp in the given namespace
@@ -1420,18 +1440,12 @@ func (r *DeploymentSubroutine) hasIstioProxyInjected(ctx context.Context, labelS
 }
 
 func (r *DeploymentSubroutine) manageAuthorizationWebhookSecrets(ctx context.Context, inst *pmcorev1alpha1.PlatformMesh) (subroutines.Result, error) {
-	// Create Issuer
-	caIssuerPath := fmt.Sprintf("%s/rebac-auth-webhook/ca-issuer.yaml", r.workspaceDirectory)
-	err := r.ApplyManifestFromFileWithMergedValues(ctx, caIssuerPath, r.clientRuntime, map[string]any{})
-	if err != nil {
-		return subroutines.OK(), err
-	}
-
-	// Create Certificate
-	certPath := fmt.Sprintf("%s/rebac-auth-webhook/webhook-cert.yaml", r.workspaceDirectory)
-	err = r.ApplyManifestFromFileWithMergedValues(ctx, certPath, r.clientRuntime, map[string]any{})
-	if err != nil {
-		return subroutines.OK(), err
+	// The serving certificate is signed by a long-lived CA, so renewing it keeps the CA that kcp trusts.
+	for _, file := range []string{"selfsigned-issuer.yaml", "ca-cert.yaml", "ca-issuer.yaml", "webhook-cert.yaml"} {
+		path := fmt.Sprintf("%s/rebac-auth-webhook/%s", r.workspaceDirectory, file)
+		if err := r.ApplyManifestFromFileWithMergedValues(ctx, path, r.clientRuntime, map[string]any{}); err != nil {
+			return subroutines.OK(), err
+		}
 	}
 
 	// Prepare KCP Webhook secret

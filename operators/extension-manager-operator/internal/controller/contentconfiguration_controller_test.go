@@ -29,37 +29,39 @@ import (
 	"time"
 
 	"github.com/jarcoal/httpmock"
-	"github.com/kcp-dev/multicluster-provider/apiexport"
+	"github.com/stretchr/testify/require"
+	"github.com/stretchr/testify/suite"
+
+	"go.platform-mesh.io/apis/ui/v1alpha1"
+	"go.platform-mesh.io/extension-manager-operator/internal/config"
+	commonTesting "go.platform-mesh.io/extension-manager-operator/pkg/util/testing"
+	"go.platform-mesh.io/extension-manager-operator/pkg/validation/validation_test"
 	platformmeshconfig "go.platform-mesh.io/golang-commons/config"
 	"go.platform-mesh.io/golang-commons/logger"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	mcmanager "sigs.k8s.io/multicluster-runtime/pkg/manager"
 	"sigs.k8s.io/yaml"
 
 	"github.com/kcp-dev/logicalcluster/v3"
+	"github.com/kcp-dev/multicluster-provider/apiexport"
 	clusterclient "github.com/kcp-dev/multicluster-provider/client"
 	"github.com/kcp-dev/multicluster-provider/envtest"
 	apisv1alpha1 "github.com/kcp-dev/sdk/apis/apis/v1alpha1"
 	"github.com/kcp-dev/sdk/apis/core"
 	tenancyv1alpha1 "github.com/kcp-dev/sdk/apis/tenancy/v1alpha1"
 	topologyv1alpha1 "github.com/kcp-dev/sdk/apis/topology/v1alpha1"
-	"github.com/stretchr/testify/require"
-	"github.com/stretchr/testify/suite"
-
-	"k8s.io/apimachinery/pkg/api/meta"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/rest"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
-
-	"go.platform-mesh.io/apis/ui/v1alpha1"
-	"go.platform-mesh.io/extension-manager-operator/internal/config"
-	commonTesting "go.platform-mesh.io/extension-manager-operator/pkg/util/testing"
-	"go.platform-mesh.io/extension-manager-operator/pkg/validation/validation_test"
 )
 
 const (
@@ -156,8 +158,15 @@ func (suite *ContentConfigurationTestSuite) SetupSuite() {
 			},
 		},
 	}
-	err = suite.cli.Cluster(suite.consumer).Create(ctx, ab)
-	suite.Require().NoError(err, "failed to create APIBinding for ui.platform-mesh.io in consumer workspace")
+	var createErr error
+	suite.Eventually(func() bool {
+		createErr = suite.cli.Cluster(suite.consumer).Create(ctx, ab.DeepCopy())
+		if apierrors.IsAlreadyExists(createErr) {
+			createErr = nil
+		}
+		return createErr == nil
+	}, defaultTestTimeout, defaultTickInterval)
+	suite.Require().NoError(createErr, "failed to create APIBinding for ui.platform-mesh.io in consumer workspace")
 
 	suite.Eventually(func() bool {
 		getErr := suite.cli.Cluster(suite.consumer).Get(ctx, types.NamespacedName{Name: "ui.platform-mesh.io"}, ab)
@@ -187,6 +196,32 @@ func (suite *ContentConfigurationTestSuite) SetupSuite() {
 		}
 		return rt
 	})
+	// The provider drops a virtual workspace URL whose first watch fails and only retries it when
+	// the endpoint slice changes again, so kcp must already answer discovery on every endpoint
+	// before the provider starts. Right after creation the slice can list a URL that still 404s.
+	// The provider's wildcard cache talks to <url>/clusters/*, and the bare URL never serves
+	// discovery, so probe the same path.
+	suite.Eventually(func() bool {
+		if err := suite.cli.Cluster(suite.provider).Get(ctx, types.NamespacedName{Name: "ui.platform-mesh.io"}, aes); err != nil {
+			return false
+		}
+		if len(aes.Status.APIExportEndpoints) == 0 {
+			return false
+		}
+		for _, endpoint := range aes.Status.APIExportEndpoints {
+			endpointConfig := rest.CopyConfig(providerConfig)
+			endpointConfig.Host = strings.TrimSuffix(endpoint.URL, "/") + "/clusters/*"
+			dc, err := discovery.NewDiscoveryClientForConfig(endpointConfig)
+			if err != nil {
+				return false
+			}
+			if _, err := dc.ServerGroups(); err != nil {
+				return false
+			}
+		}
+		return true
+	}, 4*defaultTestTimeout, defaultTickInterval, "APIExport virtual workspace for ui.platform-mesh.io did not start serving discovery")
+
 	provider, err := apiexport.New(providerConfig, "ui.platform-mesh.io", apiexport.Options{Scheme: scheme.Scheme})
 	suite.Require().NoError(err, "failed to create APIExport provider for ui.platform-mesh.io")
 

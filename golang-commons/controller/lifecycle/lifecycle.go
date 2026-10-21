@@ -406,6 +406,8 @@ func updateStatus(ctx context.Context, cl ctrlruntimeclient.Client, original run
 	if err != nil {
 		if apierrors.IsConflict(err) {
 			log.Warn().Err(err).Msg("cannot update reconciliation Conditions, kubernetes client error")
+		} else if apierrors.IsNotFound(err) {
+			log.Info().Err(err).Msg("skipping status update - resource was deleted")
 		} else {
 			log.Error().Err(err).Msg("cannot update status, kubernetes client error")
 			if generationChanged {

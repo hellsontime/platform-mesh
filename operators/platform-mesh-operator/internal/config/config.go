@@ -16,7 +16,13 @@ limitations under the License.
 
 package config
 
-import "github.com/spf13/pflag"
+import (
+	"strings"
+
+	"github.com/spf13/pflag"
+
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
 
 type KCPConfig struct {
 	Url                    string
@@ -31,6 +37,7 @@ type IDPConfig struct {
 	RegistrationAllowed                     bool
 	WelcomeAdditionalRedirectUris           []string
 	WelcomeAdditionalPostLogoutRedirectUris []string
+	UserClaim                               string
 }
 
 type DeploymentSubroutineConfig struct {
@@ -38,6 +45,16 @@ type DeploymentSubroutineConfig struct {
 	AuthorizationWebhookSecretName   string
 	AuthorizationWebhookSecretCAName string
 	EnableIstio                      bool
+	IgnoredResources                 []IgnoredResource
+}
+
+// IgnoredResource identifies a KCP resource the operator should not apply.
+// All fields are optional; an empty string matches any value for that field.
+// Path is the KCP workspace path (e.g. "root:platform-mesh-system").
+type IgnoredResource struct {
+	schema.GroupVersionKind
+	Path string
+	Name string
 }
 
 type KcpSetupSubroutineConfig struct {
@@ -115,6 +132,9 @@ func NewOperatorConfig() OperatorConfig {
 			FrontProxyPort:         "8443",
 			ClusterAdminSecretName: "kcp-cluster-admin-client-cert",
 		},
+		IDP: IDPConfig{
+			UserClaim: "email",
+		},
 		Providers: NewProvidersConfig(),
 		Subroutines: SubroutinesConfig{
 			Deployment: DeploymentSubroutineConfig{
@@ -165,11 +185,19 @@ func (c *OperatorConfig) AddFlags(fs *pflag.FlagSet) {
 	fs.BoolVar(&c.IDP.RegistrationAllowed, "idp-registration-allowed", c.IDP.RegistrationAllowed, "Allow IDP registration")
 	fs.StringSliceVar(&c.IDP.WelcomeAdditionalRedirectUris, "idp-welcome-additional-redirect-uris", c.IDP.WelcomeAdditionalRedirectUris, "Additional redirect URIs for the welcome client (comma-separated)")
 	fs.StringSliceVar(&c.IDP.WelcomeAdditionalPostLogoutRedirectUris, "idp-welcome-additional-post-logout-redirect-uris", c.IDP.WelcomeAdditionalPostLogoutRedirectUris, "Additional post-logout redirect URIs for the welcome client (comma-separated)")
+	fs.StringVar(&c.IDP.UserClaim, "user-claim", c.IDP.UserClaim, "Set the ID token user claim for workspace authentication")
 
 	fs.BoolVar(&c.Subroutines.Deployment.Enabled, "subroutines-deployment-enabled", c.Subroutines.Deployment.Enabled, "Enable deployment subroutine")
 	fs.StringVar(&c.Subroutines.Deployment.AuthorizationWebhookSecretName, "authorization-webhook-secret-name", c.Subroutines.Deployment.AuthorizationWebhookSecretName, "Authorization webhook secret name")
 	fs.StringVar(&c.Subroutines.Deployment.AuthorizationWebhookSecretCAName, "authorization-webhook-secret-ca-name", c.Subroutines.Deployment.AuthorizationWebhookSecretCAName, "Authorization webhook CA secret name")
 	fs.BoolVar(&c.Subroutines.Deployment.EnableIstio, "subroutines-deployment-enable-istio", c.Subroutines.Deployment.EnableIstio, "Enable Istio integration in deployment subroutine")
+
+	var ignoredResourcesRaw []string
+	fs.StringSliceVar(&ignoredResourcesRaw, "subroutines-deployment-ignored-resources", nil,
+		"Resources the operator will not apply, as a comma-separated list of path=<p>,group=<g>,version=<v>,kind=<k>,name=<n> entries (all fields optional)")
+	if fs.Changed("subroutines-deployment-ignored-resources") {
+		c.Subroutines.Deployment.IgnoredResources = ParseIgnoredResources(ignoredResourcesRaw)
+	}
 
 	fs.BoolVar(&c.Subroutines.KcpSetup.Enabled, "subroutines-kcp-setup-enabled", c.Subroutines.KcpSetup.Enabled, "Enable KCP setup subroutine")
 	fs.StringVar(&c.Subroutines.KcpSetup.DomainCertificateCASecretName, "domain-certificate-ca-secret-name", c.Subroutines.KcpSetup.DomainCertificateCASecretName, "Domain certificate secret name")
@@ -211,4 +239,33 @@ func NewProvidersConfig() ProvidersConfig {
 		ProvidersAPIExportEndpointSliceName:      "providers.platform-mesh.io",
 		ProvidersAPIExportEndpointSliceWorkspace: "root:platform-mesh-system",
 	}
+}
+
+// ParseIgnoredResources converts a slice of "path=<p>,group=<g>,version=<v>,kind=<k>,name=<n>"
+// strings into IgnoredResource entries. Unknown keys are silently ignored.
+func ParseIgnoredResources(raw []string) []IgnoredResource {
+	result := make([]IgnoredResource, 0, len(raw))
+	for _, entry := range raw {
+		var ir IgnoredResource
+		for _, part := range strings.Split(entry, ",") {
+			kv := strings.SplitN(strings.TrimSpace(part), "=", 2)
+			if len(kv) != 2 {
+				continue
+			}
+			switch strings.TrimSpace(kv[0]) {
+			case "path":
+				ir.Path = strings.TrimSpace(kv[1])
+			case "group":
+				ir.Group = strings.TrimSpace(kv[1])
+			case "version":
+				ir.Version = strings.TrimSpace(kv[1])
+			case "kind":
+				ir.Kind = strings.TrimSpace(kv[1])
+			case "name":
+				ir.Name = strings.TrimSpace(kv[1])
+			}
+		}
+		result = append(result, ir)
+	}
+	return result
 }

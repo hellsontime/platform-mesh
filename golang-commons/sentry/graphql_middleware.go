@@ -36,6 +36,18 @@ func GraphQLErrorPresenter(skipTenants ...string) graphql.ErrorPresenterFunc {
 			return nil
 		}
 
+		if sentryErr, ok := AsSentryError(e); ok && sentryErr.GetUserMessage() != "" {
+			err.Message = sentryErr.GetUserMessage()
+			if err.Extensions == nil {
+				err.Extensions = map[string]any{}
+			}
+			err.Extensions["userError"] = sentryErr.GetUserMessage()
+			err.Extensions["technicalError"] = e.Error()
+			if code := sentryErr.GetCode(); code != "" {
+				err.Extensions["code"] = code
+			}
+		}
+
 		if !IsSentryError(e) {
 			l := logger.LoadLoggerFromContext(ctx)
 

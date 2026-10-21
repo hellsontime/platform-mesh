@@ -61,6 +61,10 @@ spec:
   dependsOn:
 {{ toYaml $config.dependsOn | nindent 4 }}
   {{- end }}
+  {{- if $config.postRenderers }}
+  postRenderers:
+{{ toYaml $config.postRenderers | nindent 4 }}
+  {{- end }}
   timeout: {{ $values.timeout | default "15m" }}
   install:
     remediation:

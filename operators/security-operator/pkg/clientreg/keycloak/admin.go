@@ -59,7 +59,8 @@ func (c *AdminClient) TokenForRegistration(ctx context.Context) (string, error) 
 	}
 	defer resp.Body.Close() //nolint:errcheck
 
-	if resp.StatusCode != http.StatusOK {
+	// Keycloak <26.7 returned 200, 26.7+ returns the contractual 201.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return "", readErrorResponse(resp, "create initial access token")
 	}
 

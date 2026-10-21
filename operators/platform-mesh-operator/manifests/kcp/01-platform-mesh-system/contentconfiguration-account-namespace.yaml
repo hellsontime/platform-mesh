@@ -46,7 +46,8 @@ spec:
                           "keepSelectedForChildren": true,
                           "url": "/assets/platform-mesh-portal-ui-wc.js#generic-list-view",
                           "webcomponent": {
-                              "selfRegistered": true
+                              "selfRegistered": true,
+                              "type": "module"
                           },
                           "context": {
                               "resourceDefinition": {
@@ -71,7 +72,7 @@ spec:
                                                       "buttonSettings": {
                                                           "icon": "decline",
                                                           "design": "Transparent",
-                                                          "action": "delete-resource",
+                                                          "action": "delete",
                                                           "tooltip": "Delete"
                                                       }
                                                   },

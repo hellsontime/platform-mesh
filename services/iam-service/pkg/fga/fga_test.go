@@ -35,7 +35,6 @@ import (
 	"go.platform-mesh.io/iam-service/pkg/graph"
 	"go.platform-mesh.io/iam-service/pkg/roles"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 )
 
@@ -121,7 +120,6 @@ func TestService_ListUsers_Success(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",
@@ -318,7 +316,6 @@ func TestService_ListUsers_NoKCPContext(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",
@@ -467,7 +464,6 @@ func TestService_AssignRolesToUsers_Success(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",
@@ -536,7 +532,6 @@ func TestService_AssignRolesToUsers_InvalidRole(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",
@@ -615,7 +610,6 @@ func TestService_RemoveRole_Success(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",
@@ -704,7 +698,6 @@ func TestService_RemoveRole_RoleNotAssigned(t *testing.T) {
 	}
 
 	ai := &pmcorev1alpha1.AccountInfo{
-		ObjectMeta: metav1.ObjectMeta{Name: "account"},
 		Spec: pmcorev1alpha1.AccountInfoSpec{
 			Account: pmcorev1alpha1.AccountLocation{
 				GeneratedClusterId: "cluster-123",

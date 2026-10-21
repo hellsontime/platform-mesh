@@ -51,7 +51,9 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/rest"
@@ -265,7 +267,7 @@ func (s *KindTestSuite) createKindCluster() error {
 	s.config = configClient
 
 	pods := &corev1.PodList{}
-	err = s.client.List(context.TODO(), pods, &ctrlruntimeclient.ListOptions{
+	err = s.client.List(s.T().Context(), pods, &ctrlruntimeclient.ListOptions{
 		Namespace: "kube-system",
 	})
 	if err != nil {
@@ -423,6 +425,14 @@ func (s *KindTestSuite) createReleases(ctx context.Context) error {
 	if err := ApplyManifestFromFile(ctx, "../../../test/e2e/kind/yaml/flux2-v2.6.4/flux2-install.yaml", s.client, make(map[string]string)); err != nil {
 		return err
 	}
+	// The image automation controllers are part of the stock install manifest but nothing in
+	// the e2e uses them; drop them so their requests do not count against the CI runner.
+	for _, name := range []string{"image-automation-controller", "image-reflector-controller"} {
+		dep := &appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "flux-system"}}
+		if err := s.client.Delete(ctx, dep); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("deleting unused flux deployment %s: %w", name, err)
+		}
+	}
 	avail := s.Eventually(func() bool {
 		deployment := &appsv1.Deployment{}
 
@@ -513,9 +523,19 @@ func (s *KindTestSuite) SetupSuite() {
 	}
 	s.logger.Info().Msg("resources.delivery.ocm.software CRD established")
 
+	if err = s.waitForDeploymentReady(ctx, "ocm-system", "ocm-k8s-toolkit-controller-manager", 5*time.Minute); err != nil {
+		s.FailNow("OCM controller manager deployment not ready in time")
+	}
+	s.logger.Info().Msg("OCM controller manager ready")
+
 	if err = s.applyOCM(ctx); err != nil {
 		s.FailNow("Failed to apply OCM manifests", err)
 	}
+
+	if err = s.waitForOCMComponentReady(ctx, "platform-mesh", "platform-mesh-system", 10*time.Minute); err != nil {
+		s.FailNow("OCM Component not ready in time")
+	}
+	s.logger.Info().Msg("OCM Component ready")
 
 	// add Platform Mesh profile ConfigMap
 	if err = ApplyManifestFromFile(ctx, "../../../test/e2e/kind/yaml/platform-mesh-resource/default-profile.yaml", s.client, make(map[string]string)); err != nil {
@@ -548,6 +568,43 @@ func (s *KindTestSuite) SetupSuite() {
 	// Run the PlatformMesh operator
 	s.logger.Info().Msg("starting PlatformMesh operator...")
 	s.runPlatformMeshOperator(ctx)
+}
+
+func (s *KindTestSuite) waitForOCMComponentReady(ctx context.Context, name, namespace string, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 10*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		comp := &unstructured.Unstructured{}
+		comp.SetGroupVersionKind(schema.GroupVersionKind{Group: "delivery.ocm.software", Version: "v1alpha1", Kind: "Component"})
+		if err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{Name: name, Namespace: namespace}, comp); err != nil {
+			s.logger.Debug().Err(err).Msgf("OCM Component %s/%s not found yet", namespace, name)
+			return false, nil //nolint:nilerr
+		}
+		conditions, _, _ := unstructured.NestedSlice(comp.Object, "status", "conditions")
+		for _, c := range conditions {
+			cm, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			if cm["type"] == "Ready" && cm["status"] == "True" {
+				return true, nil
+			}
+		}
+		s.logger.Debug().Msgf("OCM Component %s/%s not ready yet, conditions=%+v", namespace, name, conditions)
+		return false, nil
+	})
+}
+
+func (s *KindTestSuite) waitForDeploymentReady(ctx context.Context, namespace, name string, timeout time.Duration) error {
+	return wait.PollUntilContextTimeout(ctx, 5*time.Second, timeout, true, func(ctx context.Context) (bool, error) {
+		deployment := &appsv1.Deployment{}
+		if err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{Namespace: namespace, Name: name}, deployment); err != nil {
+			return false, nil //nolint:nilerr
+		}
+		ready := deployment.Status.ReadyReplicas > 0
+		if !ready {
+			s.logger.Debug().Msgf("deployment %s/%s not ready yet (%d/%d)", namespace, name, deployment.Status.ReadyReplicas, *deployment.Spec.Replicas)
+		}
+		return ready, nil
+	})
 }
 
 func (s *KindTestSuite) waitForCRDEstablished(ctx context.Context, crdName string, timeout time.Duration) error {
@@ -606,6 +663,104 @@ func (s *KindTestSuite) applyKustomize(ctx context.Context) error {
 }
 
 func (s *KindTestSuite) TearDownSuite() {
+	if !s.T().Failed() {
+		return
+	}
+	s.dumpDiagnostics(context.Background())
+}
+
+func (s *KindTestSuite) dumpDiagnostics(ctx context.Context) {
+	s.logger.Info().Msg("=== FAILURE DIAGNOSTICS ===")
+
+	// PlatformMesh CR status
+	pm := &pmcorev1alpha1.PlatformMesh{}
+	if err := s.client.Get(ctx, ctrlruntimeclient.ObjectKey{Name: "platform-mesh", Namespace: "platform-mesh-system"}, pm); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to get PlatformMesh")
+	} else {
+		s.logger.Info().Msgf("diag: PlatformMesh conditions: %+v", pm.Status.Conditions)
+	}
+
+	// HelmReleases
+	hrList := &unstructured.UnstructuredList{}
+	hrList.SetGroupVersionKind(schema.GroupVersionKind{Group: "helm.toolkit.fluxcd.io", Version: "v2", Kind: "HelmReleaseList"})
+	if err := s.client.List(ctx, hrList); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to list HelmReleases")
+	} else {
+		for _, hr := range hrList.Items {
+			conditions, _, _ := unstructured.NestedSlice(hr.Object, "status", "conditions")
+			s.logger.Info().Msgf("diag: HelmRelease %s/%s conditions=%+v", hr.GetNamespace(), hr.GetName(), conditions)
+		}
+	}
+
+	// OCIRepositories
+	ociList := &unstructured.UnstructuredList{}
+	ociList.SetGroupVersionKind(schema.GroupVersionKind{Group: "source.toolkit.fluxcd.io", Version: "v1", Kind: "OCIRepositoryList"})
+	if err := s.client.List(ctx, ociList); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to list OCIRepositories")
+	} else {
+		for _, o := range ociList.Items {
+			conditions, _, _ := unstructured.NestedSlice(o.Object, "status", "conditions")
+			s.logger.Info().Msgf("diag: OCIRepository %s/%s conditions=%+v", o.GetNamespace(), o.GetName(), conditions)
+		}
+	}
+
+	// OCM Resources
+	resourceList := &unstructured.UnstructuredList{}
+	resourceList.SetGroupVersionKind(schema.GroupVersionKind{Group: "delivery.ocm.software", Version: "v1alpha1", Kind: "ResourceList"})
+	if err := s.client.List(ctx, resourceList); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to list OCM Resources")
+	} else {
+		for _, r := range resourceList.Items {
+			conditions, _, _ := unstructured.NestedSlice(r.Object, "status", "conditions")
+			version, _, _ := unstructured.NestedString(r.Object, "status", "resource", "version")
+			s.logger.Info().Msgf("diag: Resource %s/%s version=%q conditions=%+v", r.GetNamespace(), r.GetName(), version, conditions)
+		}
+	}
+
+	// OCM Components
+	componentList := &unstructured.UnstructuredList{}
+	componentList.SetGroupVersionKind(schema.GroupVersionKind{Group: "delivery.ocm.software", Version: "v1alpha1", Kind: "ComponentList"})
+	if err := s.client.List(ctx, componentList); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to list OCM Components")
+	} else {
+		for _, c := range componentList.Items {
+			conditions, _, _ := unstructured.NestedSlice(c.Object, "status", "conditions")
+			s.logger.Info().Msgf("diag: Component %s/%s conditions=%+v", c.GetNamespace(), c.GetName(), conditions)
+		}
+	}
+
+	// Pods in platform-mesh-system
+	podList := &corev1.PodList{}
+	if err := s.client.List(ctx, podList, ctrlruntimeclient.InNamespace("platform-mesh-system")); err != nil {
+		s.logger.Error().Err(err).Msg("diag: failed to list pods in platform-mesh-system")
+	} else {
+		for _, pod := range podList.Items {
+			s.logger.Info().Msgf("diag: Pod %s phase=%s ready=%v", pod.Name, pod.Status.Phase, isPodReady(&pod))
+			for _, c := range pod.Status.Conditions {
+				if c.Status != corev1.ConditionTrue && c.Message != "" {
+					s.logger.Info().Msgf("diag:   condition %s=%s reason=%s message=%s", c.Type, c.Status, c.Reason, c.Message)
+				}
+			}
+			for _, cs := range pod.Status.InitContainerStatuses {
+				s.logger.Info().Msgf("diag:   init container %s ready=%v restarts=%d state=%+v", cs.Name, cs.Ready, cs.RestartCount, cs.State)
+			}
+			for _, cs := range pod.Status.ContainerStatuses {
+				s.logger.Info().Msgf("diag:   container %s ready=%v restarts=%d state=%+v", cs.Name, cs.Ready, cs.RestartCount, cs.State)
+				if t := cs.LastTerminationState.Terminated; t != nil {
+					s.logger.Info().Msgf("diag:   container %s last terminated reason=%s exitCode=%d message=%q", cs.Name, t.Reason, t.ExitCode, t.Message)
+				}
+			}
+		}
+	}
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
 
 func (s *KindTestSuite) InstallCRDs(ctx context.Context) error {

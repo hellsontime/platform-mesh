@@ -48,6 +48,18 @@ func listClientsJSON() string {
 }
 
 func TestAdminClient_TokenForRegistration(t *testing.T) {
+	tokenServer := func(status int) func(*testing.T) *httptest.Server {
+		return func(t *testing.T) *httptest.Server {
+			return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				assert.Equal(t, http.MethodPost, r.Method)
+				assert.Equal(t, "/admin/realms/test-realm/clients-initial-access", r.URL.Path)
+				assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
+				w.WriteHeader(status)
+				json.NewEncoder(w).Encode(map[string]string{"token": "initial-access-token-123"}) //nolint:errcheck
+			}))
+		}
+	}
+
 	tests := []struct {
 		name        string
 		setupServer func(t *testing.T) *httptest.Server
@@ -55,16 +67,14 @@ func TestAdminClient_TokenForRegistration(t *testing.T) {
 		wantErr     bool
 	}{
 		{
-			name: "successful token retrieval",
-			setupServer: func(t *testing.T) *httptest.Server {
-				return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					assert.Equal(t, http.MethodPost, r.Method)
-					assert.Equal(t, "/admin/realms/test-realm/clients-initial-access", r.URL.Path)
-					assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-					json.NewEncoder(w).Encode(map[string]string{"token": "initial-access-token-123"}) //nolint:errcheck
-				}))
-			},
-			wantToken: "initial-access-token-123",
+			name:        "successful token retrieval, status 200",
+			setupServer: tokenServer(http.StatusOK),
+			wantToken:   "initial-access-token-123",
+		},
+		{
+			name:        "successful token retrieval, status 201",
+			setupServer: tokenServer(http.StatusCreated),
+			wantToken:   "initial-access-token-123",
 		},
 		{
 			name: "server returns error",

@@ -53,7 +53,7 @@ type ProviderResourceSubroutine struct {
 }
 
 func NewProviderResourceSubroutine(cl ctrlruntimeclient.Client, kcpHelper pmsubs.KcpHelper, cfg *config.OperatorConfig, kcpUrl string) (*ProviderResourceSubroutine, error) {
-	rl, err := ratelimiter.NewStaticThenExponentialRateLimiter[*pmprovidersv1alpha1.ManagedProvider](
+	rl, err := ratelimiter.NewObjectRateLimiter[*pmprovidersv1alpha1.ManagedProvider](
 		ratelimiter.NewConfig())
 	if err != nil {
 		return nil, fmt.Errorf("creating RateLimiter: %v", err)
@@ -148,10 +148,7 @@ func (r *ProviderResourceSubroutine) Finalize(ctx context.Context, obj ctrlrunti
 	return subroutines.StopWithRequeue(r.limiter.When(inst), "Waiting for Provider to be deleted"), nil
 }
 
-func (r *ProviderResourceSubroutine) Finalizers(obj ctrlruntimeclient.Object) []string {
-	if !obj.(*pmprovidersv1alpha1.ManagedProvider).Spec.CleanupOnDelete {
-		return []string{}
-	}
+func (r *ProviderResourceSubroutine) Finalizers(_ ctrlruntimeclient.Object) []string {
 	return []string{providerResourceFinalizer}
 }
 

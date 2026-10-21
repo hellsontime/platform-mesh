@@ -246,32 +246,31 @@ func (suite *IntegrationSuite) setupPlatformMesh(t *testing.T) {
 		return binding.Status.Phase == kcpapisv1alpha2.APIBindingPhaseBound
 	}, 10*time.Second, 200*time.Millisecond, "APIBinding providers.platform-mesh.io should be bound")
 
+	// The bind permission check can lag behind the new APIExport when it is on another shard.
+	createWorkspaceType := func(wst *kcptenancyv1alpha1.WorkspaceType) {
+		suite.Require().Eventually(func() bool {
+			err := rootClient.Create(ctx, wst.DeepCopy())
+			return err == nil || apierrors.IsAlreadyExists(err)
+		}, 30*time.Second, 500*time.Millisecond, "WorkspaceType %s should be created", wst.Name)
+	}
+
 	// Create WorkspaceTypes in root workspace
 	var orgWorkspaceType kcptenancyv1alpha1.WorkspaceType
 	suite.Require().NoError(yaml.Unmarshal(WorkspaceTypeOrgYAML, &orgWorkspaceType))
 
-	err = rootClient.Create(ctx, &orgWorkspaceType)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		suite.Require().NoError(err)
-	}
+	createWorkspaceType(&orgWorkspaceType)
 	t.Log("created WorkspaceType 'org' in root workspace")
 
 	var orgsWorkspaceType kcptenancyv1alpha1.WorkspaceType
 	suite.Require().NoError(yaml.Unmarshal(WorkspaceTypeOrgsYAML, &orgsWorkspaceType))
 
-	err = rootClient.Create(ctx, &orgsWorkspaceType)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		suite.Require().NoError(err)
-	}
+	createWorkspaceType(&orgsWorkspaceType)
 	t.Log("created WorkspaceType 'orgs' in root workspace")
 
 	var accountWorkspaceType kcptenancyv1alpha1.WorkspaceType
 	suite.Require().NoError(yaml.Unmarshal(WorkspaceTypeAccountYAML, &accountWorkspaceType))
 
-	err = rootClient.Create(ctx, &accountWorkspaceType)
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		suite.Require().NoError(err)
-	}
+	createWorkspaceType(&accountWorkspaceType)
 	t.Log("created WorkspaceType 'account' in root workspace")
 
 	// create :root:orgs ws

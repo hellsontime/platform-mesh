@@ -28,14 +28,16 @@ The service is organization-aware and derives org context from the request host.
 
 ### Search endpoint
 
-`GET /rest/v1/search?q=<query>&mode=<lexical|semantic>&limit=<n>&page=<n>&cursor=<opaque>&resource=<plural>&filter.<field>=<value>`
+`GET /rest/v1/search?q=<query>&mode=<lexical|semantic>&limit=<n>&page=<n>&cursor=<opaque>&resource=<plural>&resources=<plural,...>&filter.<field>=<value>&filter.fga_role=<relation>`
 
 Query params:
 
 - `q` (required): free-text query
 - `mode` (optional): search mode; `lexical` by default, `semantic` to use OpenSearch neural search on configured semantic fields
 - `resource` (optional for `lexical`, required for `semantic`): plural resource name; lexical mode can search across all resources, semantic mode must target a single resource
+- `resources` (optional): comma-separated resource names used when `resource` is omitted
 - `filter.<field>` (optional, repeatable): exact-match filters; requires `resource`
+- `filter.fga_role` (optional, single value): restricts the account pre-filter to an arbitrary relation from the active OpenFGA account model, for example `owner`; requires an explicit target through `resource` or `resources`. An empty, repeated, malformed, or schema-unknown relation is rejected with `400 Bad Request`
 - `limit` (optional): default `20`, max `100`
 - `page` (optional): 1-based result page using `limit` as the page size; used when `cursor` is omitted
 - `cursor` (optional): opaque pagination cursor
@@ -46,6 +48,10 @@ Before querying OpenSearch, the service resolves the accounts the caller can acc
 adds those exact account objects as an internal `filterable_fields.account_fga_object` filter. OpenSearch therefore
 returns the page-based `totalCount` directly for the caller's accessible account scope. Returned hits are still
 batch-checked with OpenFGA as a defense in depth measure.
+
+By default, account access is resolved with the configured `--openfga-default-role`. When `filter.fga_role` is
+provided, that relation is used for this request instead. The selected relation is also bound to the pagination
+cursor, so a cursor cannot be continued with a different role.
 
 Semantic mode behavior:
 
@@ -59,6 +65,10 @@ Examples:
 
 - Lexical search across all resources:
   - `GET /rest/v1/search?q=developer+portal`
+- Lexical search within components in accounts where the caller is an owner:
+  - `GET /rest/v1/search?q=developer+portal&resource=components&filter.fga_role=owner`
+- Lexical search within components, combining account role and document filters:
+  - `GET /rest/v1/search?q=developer+portal&resource=components&filter.fga_role=owner&filter.status=Ready`
 - Semantic search within one resource:
   - `GET /rest/v1/search?q=developer+portal&resource=components&mode=semantic`
 
@@ -88,6 +98,56 @@ Returns all searchable resources for the org with:
 
 Returns distinct authorized values for one filterable field within a single resource.
 
+### Errors
+
+Every error response from all endpoints, from the auth middleware, and for unknown routes is an
+[RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details structure served as
+`Content-Type: application/json`:
+
+```json
+{
+  "type": "https://platform-mesh.io/problems/search/invalid-request",
+  "title": "Invalid request",
+  "status": 400,
+  "detail": "filters require a resource",
+  "instance": "/rest/v1/search",
+  "category": "invalid_request",
+  "requestId": "5a9f0f9c-1a1e-4a3c-9a0e-7c9c1f2b3d4e"
+}
+```
+
+`category` and `requestId` are RFC 9457 extension members:
+
+- `category` is the coarse, stable classification to branch on. It is a small closed set, so new problem
+  types can be added without breaking callers that switch on it.
+- `requestId` echoes the `X-Request-Id` of the request (generated when absent) and correlates the response
+  with the service logs, which hold the underlying cause.
+
+`type` identifies the specific problem and is the stable code to match on when `category` is too coarse.
+
+| `category` | `type` (suffix of `https://platform-mesh.io/problems/search/`) | Status | Meaning |
+| --- | --- | --- | --- |
+| `invalid_request` | `invalid-request` | 400 | Query parameters are missing, malformed, or contradictory |
+| `invalid_request` | `invalid-cursor` | 400 | The `cursor` is malformed or does not match the current query |
+| `invalid_request` | `method-not-allowed` | 405 | The HTTP method is not allowed for this endpoint |
+| `authentication` | `authentication-required` | 401 | Bearer token missing, malformed, or rejected |
+| `authentication` | `authentication-unavailable` | 500 | The token could not be validated |
+| `authorization` | `access-denied` | 403 | The caller may not access the requested resource |
+| `authorization` | `authorization-unavailable` | 500 | Permissions could not be evaluated |
+| `search_backend` | `search-backend-unavailable` | 500 | The search backend could not process the request |
+| `search_backend` | `index-unavailable` | 500 | No search index is available for this organization |
+| `upstream_timeout` | `upstream-timeout` | 500 | An upstream system timed out; the request is worth retrying |
+| `not_found` | `not-found` | 404 | Unknown endpoint |
+| `internal` | `internal-error` | 500 | Unclassified failure |
+
+`detail` is human-readable and safe to surface to end users. For client errors it names the specific
+problem; for backend failures it stays deliberately generic, because naming the failing component would
+disclose the service's dependencies to unauthenticated callers. `instance` carries the request path only —
+never the query string, which holds the caller's search terms and filters.
+
+The problem set is defined once in `internal/httperr` and reused by every endpoint; `handleError` in
+`internal/router` maps service errors onto it.
+
 ## Getting Started
 
 ### Requirements
@@ -97,6 +157,35 @@ Returns distinct authorized values for one filterable field within a single reso
   - kcp API (for org access check + SearchIndex resolution)
   - OpenSearch
   - OpenFGA gRPC endpoint
+
+### Run locally against a running Platform Mesh instance
+
+#### Port forwards
+
+```sh
+# Opensearch
+kubectl --kubeconfig ~/.kube/config port-forward -n platform-mesh-system svc/opensearch-cluster-master 9200:9200
+```
+
+```sh
+# OpenFGA
+kubectl --kubeconfig ~/.kube/config port-forward -n platform-mesh-system svc/openfga 8081:8081
+```
+
+```sh
+cp .env.example .env
+```
+
+Fill the values and run:
+
+```sh
+go run . serve \
+  --kubeconfig ~/.kube/config \
+  --is-local=true \
+  --opensearch-url http://localhost:9200 \
+  --openfga-grpc-addr localhost:8081
+  --api-export-endpoint-slice-name=search.platform-mesh.io
+```
 
 ### Run locally
 
@@ -144,7 +233,7 @@ Main runtime flags (with defaults):
 - `--searchindex-org-workspace-path` (default: `root:orgs`)
 - `--searchindex-group` (default: `search.platform-mesh.io`)
 - `--searchindex-version` (default: `v1alpha1`)
-- `--searchindex-resource` (default: `searchindexes`)
+- `--searchindex-resource` (default: `searchindices`)
 - `--search-default-limit` (default: `20`)
 - `--search-max-limit` (default: `100`)
 - `--search-fetch-batch-size` (default: `100`)

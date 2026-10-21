@@ -35,6 +35,7 @@ import (
 
 	admissionregistrationv1 "k8s.io/api/admissionregistration/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 )
@@ -426,21 +427,21 @@ func (s *HelperTestSuite) TestApplyManifestFromFile() {
 	cl := new(mocks.Client)
 	// Server-side apply (no Get needed)
 	cl.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	err := ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/workspace-platform-mesh-system.yaml", cl, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+	err := ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/workspace-platform-mesh-system.yaml", cl, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Nil(err)
 
-	err = ApplyManifestFromFile(s.T().Context(), "invalid", nil, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+	err = ApplyManifestFromFile(s.T().Context(), "invalid", nil, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Error(err)
 
-	err = ApplyManifestFromFile(s.T().Context(), "./kcpsetup.go", nil, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+	err = ApplyManifestFromFile(s.T().Context(), "./kcpsetup.go", nil, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Error(err)
 
 	cl.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(errors.New("error")).Once()
-	err = ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/workspace-platform-mesh-system.yaml", cl, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+	err = ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/workspace-platform-mesh-system.yaml", cl, make(map[string]any), "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Error(err)
 
 	cl.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
-	err = ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/02-root/workspace-orgs.yaml", cl, make(map[string]any), "root:orgs", &pmcorev1alpha1.PlatformMesh{})
+	err = ApplyManifestFromFile(s.T().Context(), "../../manifests/kcp/02-root/workspace-orgs.yaml", cl, make(map[string]any), "root:orgs", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Nil(err)
 
 	cl.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
@@ -452,6 +453,70 @@ func (s *HelperTestSuite) TestApplyManifestFromFile() {
 		KCP: config.OperatorConfig{}.KCP,
 	}
 	ctx := context.WithValue(s.T().Context(), keys.ConfigCtxKey, operatorCfg)
-	err = ApplyManifestFromFile(ctx, "../../manifests/kcp/04-platform-mesh-system/mutatingwebhookconfiguration-admissionregistration.k8s.io.yaml", cl, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{})
+	err = ApplyManifestFromFile(ctx, "../../manifests/kcp/04-platform-mesh-system/mutatingwebhookconfiguration-admissionregistration.k8s.io.yaml", cl, templateData, "root:platform-mesh-system", &pmcorev1alpha1.PlatformMesh{}, nil)
 	s.Assert().Nil(err)
+}
+
+func (s *HelperTestSuite) TestApplyManifestFromFile_IgnoredResources_SkipsMatchedResource() {
+	tmp, err := os.CreateTemp(s.T().TempDir(), "content-config-*.yaml")
+	s.Require().NoError(err)
+	_, err = tmp.WriteString(`apiVersion: ui.platform-mesh.io/v1alpha1
+kind: ContentConfiguration
+metadata:
+  name: main-home
+  namespace: default
+`)
+	s.Require().NoError(err)
+	s.Require().NoError(tmp.Close())
+
+	ignored := []config.IgnoredResource{
+		{GroupVersionKind: schema.GroupVersionKind{Group: "ui.platform-mesh.io", Version: "v1alpha1", Kind: "ContentConfiguration"}, Name: "main-home"},
+	}
+
+	cl := new(mocks.Client)
+	// Apply must NOT be called — resource matches the ignore list.
+	err = ApplyManifestFromFile(s.T().Context(), tmp.Name(), cl, make(map[string]any), "root", &pmcorev1alpha1.PlatformMesh{}, ignored)
+	s.Assert().Nil(err)
+	cl.AssertNotCalled(s.T(), "Apply")
+}
+
+func (s *HelperTestSuite) TestApplyManifestFromFile_IgnoredResources_AppliesWhenListEmpty() {
+	tmp, err := os.CreateTemp(s.T().TempDir(), "content-config-*.yaml")
+	s.Require().NoError(err)
+	_, err = tmp.WriteString(`apiVersion: ui.platform-mesh.io/v1alpha1
+kind: ContentConfiguration
+metadata:
+  name: main-home
+  namespace: default
+`)
+	s.Require().NoError(err)
+	s.Require().NoError(tmp.Close())
+
+	cl := new(mocks.Client)
+	cl.EXPECT().Apply(mock.Anything, mock.Anything, mock.Anything, mock.Anything).Return(nil).Once()
+	// Empty ignore list — resource must be applied.
+	err = ApplyManifestFromFile(s.T().Context(), tmp.Name(), cl, make(map[string]any), "root", &pmcorev1alpha1.PlatformMesh{}, nil)
+	s.Assert().Nil(err)
+	cl.AssertExpectations(s.T())
+}
+
+func (s *HelperTestSuite) TestApplyManifestFromFile_IgnoredResources_SkipsWithWildcardKind() {
+	tmp, err := os.CreateTemp(s.T().TempDir(), "content-config-*.yaml")
+	s.Require().NoError(err)
+	_, err = tmp.WriteString(`apiVersion: ui.platform-mesh.io/v1alpha1
+kind: ContentConfiguration
+metadata:
+  name: main-home
+  namespace: default
+`)
+	s.Require().NoError(err)
+	s.Require().NoError(tmp.Close())
+
+	// Only group set — should match any Kind and Name in that group.
+	ignored := []config.IgnoredResource{{GroupVersionKind: schema.GroupVersionKind{Group: "ui.platform-mesh.io"}}}
+
+	cl := new(mocks.Client)
+	err = ApplyManifestFromFile(s.T().Context(), tmp.Name(), cl, make(map[string]any), "root", &pmcorev1alpha1.PlatformMesh{}, ignored)
+	s.Assert().Nil(err)
+	cl.AssertNotCalled(s.T(), "Apply")
 }

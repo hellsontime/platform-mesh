@@ -67,7 +67,7 @@ components:
 func (s *TemplateVarsTestSuite) Test_buildComponentsTemplateVars_DropsDependenciesOnDisabledComponents() {
 	sub, inst := s.newSubroutineWithProfile(disabledDependencyProfileYAML, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 	s.Require().NoError(err)
 
 	values := result["values"].(map[string]any)
@@ -104,7 +104,7 @@ components:
 `
 	sub, inst := s.newSubroutineWithProfile(profile, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 	s.Require().NoError(err)
 
 	s.Equal("components-ns", result["deploymentNamespace"], "components keep their own namespace")
@@ -136,7 +136,7 @@ components:
 `
 	sub, inst := s.newSubroutineWithProfile(profile, config.RemoteClusterConfig{})
 
-	result, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
+	result, _, err := sub.buildComponentsTemplateVars(context.Background(), inst, apiextensionsv1.JSON{})
 	s.Require().NoError(err)
 
 	services := result["values"].(map[string]any)["services"].(map[string]any)

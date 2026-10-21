@@ -79,7 +79,7 @@ data:
               experimentalChannel: true
           service:
             spec:
-              clusterIP: 10.96.188.4
+              clusterIP: "{{ .traefikClusterIP }}"
             type: NodePort
       etcdDruid:
         enabled: true
@@ -101,7 +101,7 @@ data:
         values:
           gatewayAPI: false
       prometheusOperatorCRDs:
-        enabled: true
+        enabled: false
         interval: 1m
         name: prometheus-operator-crds
         ocmResourceName: chart
@@ -109,7 +109,7 @@ data:
         targetNamespace: observability
         values: {}
       opentelemetryOperator:
-        enabled: true
+        enabled: false
         interval: 1m
         name: opentelemetry-operator
         ocmResourceName: chart
@@ -146,6 +146,11 @@ data:
           syncWave: 4
           enabled: true
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             hostAliases:
               enabled: true
             crds:
@@ -172,6 +177,11 @@ data:
           syncWave: 4
           enabled: true
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             crds:
               enabled: false
             hostAliases:
@@ -249,9 +259,25 @@ data:
             namespace: platform-mesh-system
           - name: cnpg-operator
             namespace: platform-mesh-system
+          # The infra chart has no knob for the kcp cache-server, and kcp-operator defaults
+          # it to 2 replicas x 500m / 1Gi with an external etcd. One replica is plenty for
+          # the e2e and keeps the stack schedulable on the default CI runner.
+          postRenderers:
+          - kustomize:
+              patches:
+              - target:
+                  kind: CacheServer
+                  name: cache-server
+                patch: |
+                  - op: add
+                    path: /spec/replicas
+                    value: 1
           values:
             cnpg:
               enabled: true
+              cluster:
+                # Chart default is 2 instances; one is enough for the e2e.
+                instances: 1
             cors:
               enabled: true
             gatewayApi:
@@ -259,7 +285,7 @@ data:
             hostAliases:
               enabled: true
               entries:
-              - ip: "10.96.188.4"
+              - ip: "{{ .traefikClusterIP }}"
                 hostnames:
                 - "localhost"
                 - "portal.localhost"
@@ -273,6 +299,14 @@ data:
               operator:
                 hostname: https://portal.localhost:8443/keycloak/
                 enabled: true
+                # Chart default requests 750m / 1Gi; trimmed for the default CI runner.
+                resources:
+                  requests:
+                    cpu: 200m
+                    memory: 512Mi
+                  limits:
+                    cpu: "2"
+                    memory: 2Gi
                 health:
                   port: 9000
                   periodSeconds: 10
@@ -298,13 +332,23 @@ data:
                 serviceAccount:
                   enabled: true
               frontProxy:
-                clusterIP: 10.96.0.100
+                clusterIP: "{{ .kcpFrontProxyClusterIP }}"
                 port: 8443
               image:
                 tag: v0.32.0
               rootShard:
                 extraArgs:
                 - --feature-gates=WorkspaceAuthentication=true
+                # kcp-operator defaults to 1 CPU / 1Gi requests and a 2 CPU limit; the
+                # request is trimmed so the shard schedules next to the rest of the stack
+                # on the default CI runner, and the CPU limit is dropped so startup is not
+                # throttled into failing its probes on a contended node.
+                resources:
+                  requests:
+                    cpu: 500m
+                    memory: 512Mi
+                  limits:
+                    memory: 3Gi
               shards: []
               webhook:
                 enabled: true
@@ -363,7 +407,7 @@ data:
             hostAliases:
               enabled: true
               values:
-                - ip: "10.96.188.4"
+                - ip: "{{ .traefikClusterIP }}"
                   hostnames:
                     - "localhost"
                     - "kcp.api.{{ .baseDomain }}"
@@ -413,6 +457,11 @@ data:
             - name: keycloak-operator
             - name: chart
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             watchNamespaces: platform-mesh-system
         cnpg-operator:
           imageResources:
@@ -445,16 +494,31 @@ data:
             kubeConfig:
               enabled: true
               secretName: kubernetes-graphql-gateway-kubeconfig
+            # Chart defaults request 250m / 1000Mi (gateway) and 250m / 500Mi (listener);
+            # trimmed for the default CI runner.
+            gateway:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 256Mi
+                limits:
+                  memory: 1200Mi
             listener:
+              resources:
+                requests:
+                  cpu: 50m
+                  memory: 128Mi
+                limits:
+                  memory: 600Mi
               virtualWorkspacesConfig:
                 content:
                   virtualWorkspaces:
                   - kubeconfig: /app/kubeconfig/kubeconfig
                     name: contentconfigurations
-                    url: https://frontproxy-front-proxy.platform-mesh-system:8443/services/contentconfigurations
+                    url: "{{ .internalFrontProxyUrl }}/services/contentconfigurations"
                   - kubeconfig: /app/kubeconfig/kubeconfig
                     name: marketplace
-                    url: https://frontproxy-front-proxy.platform-mesh-system:8443/services/marketplace
+                    url: "{{ .internalFrontProxyUrl }}/services/marketplace"
                 enabled: true
             tracing:
               enabled: false
@@ -543,6 +607,11 @@ data:
           syncWave: 4
           enabled: true
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             auth:
               default:
                 baseDomain: '{{ .baseDomain }}'
@@ -579,7 +648,7 @@ data:
             hostAliases:
               enabled: true
               entries:
-              - ip: "10.96.188.4"
+              - ip: "{{ .traefikClusterIP }}"
                 hostnames:
                 - "localhost"
                 - "portal.localhost"
@@ -601,6 +670,11 @@ data:
           syncWave: 4
           enabled: true
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             hostAliases:
               enabled: true
             certManager:
@@ -623,6 +697,11 @@ data:
           syncWave: 4
           enabled: true
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             baseDomain: '{{ .baseDomainPort }}'
             caSecret: domain-certificate-ca
             crds:
@@ -683,7 +762,11 @@ data:
             hostAliases:
               enabled: true
             deployment:
-              serverUrl: https://frontproxy-front-proxy.platform-mesh-system:8443
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+              serverUrl: "{{ .internalFrontProxyUrl }}"
               resourceSchemaName: "v250704-6d57f16.contentconfigurations.ui.platform-mesh.io"
               resourceSchemaWorkspace: "root:platform-mesh-system"
         marketplace-ui:
@@ -694,6 +777,11 @@ data:
               artifact: image
               for: marketplace-ui
           values:
+            deployment:
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
             gatewayApi:
               enabled: true
             istio:
@@ -752,7 +840,7 @@ data:
               path: prometheus.configmapReload.prometheus.image.tag
               image-ref: combined
           syncWave: 4
-          enabled: true
+          enabled: false
           targetNamespace: observability
           dependsOn:
           - name: prometheus-operator-crds

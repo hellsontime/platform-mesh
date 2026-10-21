@@ -41,7 +41,7 @@ vars:
   # bumping golangci-lint, run `UGET_UPDATE=true task lint`.
 
   # the same version is re-used for all kcp components
-  KCP_VERSION: 0.32.3
+  KCP_VERSION: 0.33.1
   APIGEN: '{{.BIN}}/apigen-v{{.KCP_VERSION}}'
 
   CONTROLLER_GEN_VERSION: v0.21.0
@@ -54,16 +54,18 @@ vars:
   ENVTEST_VERSION: v0.24.1
   ENVTEST: '{{.BIN}}/setup-envtest-{{.ENVTEST_VERSION}}'
 
-  GOLANGCI_LINT_VERSION: 2.12.2
+  GOLANGCI_LINT_VERSION: 2.13.2
   GOLANGCI_LINT: '{{.BIN}}/golangci-lint-{{.GOLANGCI_LINT_VERSION}}'
 
   GO_TEST_COVERAGE_VERSION: v2.18.9
   GO_TEST_COVERAGE: '{{.BIN}}/go-test-coverage-{{.GO_TEST_COVERAGE_VERSION}}'
 
-  # kcp release used by the operators' envtest suites (see component test-e2e).
-  CACHE_SERVER: '{{.BIN}}/cache-server-{{.KCP_VERSION}}'
-  KCP: '{{.BIN}}/kcp-{{.KCP_VERSION}}'
-  KCP_FRONT_PROXY: '{{.BIN}}/kcp-front-proxy-{{.KCP_VERSION}}'
+  # TEMPORARY: kcp image of an unreleased kcp-dev/kcp commit with kcp-dev/kcp#4384, used by the
+  # operators' envtest suites (see component test-e2e). Go back to the KCP_VERSION release once it has the fix.
+  KCP_IMAGE_TAG: 4ac7658dd
+  CACHE_SERVER: '{{.BIN}}/cache-server-{{.KCP_IMAGE_TAG}}'
+  KCP: '{{.BIN}}/kcp-{{.KCP_IMAGE_TAG}}'
+  KCP_FRONT_PROXY: '{{.BIN}}/kcp-front-proxy-{{.KCP_IMAGE_TAG}}'
   SHARDED_TEST_SERVER: '{{.BIN}}/sharded-test-server-{{.KCP_VERSION}}'
 
   KIND_VERSION: v0.29.0
@@ -155,6 +157,15 @@ tasks:
         vars: { tool: kcp-front-proxy, source: 'https://github.com/kcp-dev/kcp/releases/download/v{VERSION}/kcp-front-proxy_{VERSION}_{GOOS}_{GOARCH}.tar.gz', version: '{{ .KCP_VERSION }}' }
       - task: uget
         vars: { tool: sharded-test-server, source: 'https://github.com/kcp-dev/kcp/releases/download/v{VERSION}/sharded-test-server_{VERSION}_{GOOS}_{GOARCH}.tar.gz', version: '{{ .KCP_VERSION }}' }
+      # TEMPORARY: the tests use kcp, kcp-front-proxy and cache-server from this image until a
+      # v0.33.x release has kcp-dev/kcp#4384; then remove this step.
+      - |
+        [ -x {{.KCP}} ] && [ -x {{.KCP_FRONT_PROXY}} ] && [ -x {{.CACHE_SERVER}} ] && exit 0
+        container=$(docker create ghcr.io/kcp-dev/kcp:{{.KCP_IMAGE_TAG}})
+        docker cp $container:/kcp {{.KCP}}
+        docker cp $container:/kcp-front-proxy {{.KCP_FRONT_PROXY}}
+        docker cp $container:/cache-server {{.CACHE_SERVER}}
+        docker rm $container
 
       # kcp's sharded envtest needs binaries without any suffixes
       - 'ln -sf {{.CACHE_SERVER}} {{.BIN}}/cache-server'

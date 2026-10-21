@@ -39,6 +39,7 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	ctrlruntimeclient "sigs.k8s.io/controller-runtime/pkg/client"
@@ -972,6 +973,36 @@ func TestUpdateStatus(t *testing.T) {
 		// Then
 		assert.Error(t, err)
 		assert.Equal(t, "internal error", err.Error())
+	})
+
+	t.Run("Test UpdateStatus with not found error does not capture to sentry", func(t *testing.T) {
+		localClientMock := new(mocks.Client)
+		localSubresourceClient := new(mocks.SubResourceWriter)
+
+		original := &pmtesting.ImplementingSpreadReconciles{
+			TestApiObject: pmtesting.TestApiObject{
+				Status: pmtesting.TestStatus{
+					Some: "string",
+				},
+			}}
+		current := &pmtesting.ImplementingSpreadReconciles{
+			TestApiObject: pmtesting.TestApiObject{
+				Status: pmtesting.TestStatus{
+					Some: "string1",
+				},
+			}}
+
+		notFoundErr := apierrors.NewNotFound(schema.GroupResource{Group: "extensions.dxp.sap.com", Resource: "extensioninstances"}, "pr-bot")
+		localClientMock.EXPECT().Status().Return(localSubresourceClient)
+		localSubresourceClient.EXPECT().Update(mock.Anything, mock.Anything, mock.Anything).
+			Return(notFoundErr)
+
+		// When
+		err := updateStatus(context.Background(), localClientMock, original, current, log, true, nil)
+
+		// Then - error is returned but NOT captured to sentry
+		assert.Error(t, err)
+		assert.True(t, apierrors.IsNotFound(err))
 	})
 
 	t.Run("Test UpdateStatus with no status object (original)", func(t *testing.T) {
