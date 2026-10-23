@@ -79,8 +79,8 @@ type ComplexityRoot struct {
 	}
 
 	RoleCount struct {
-		Count  func(childComplexity int) int
-		RoleID func(childComplexity int) int
+		Count func(childComplexity int) int
+		Role  func(childComplexity int) int
 	}
 
 	RoleRemovalResult struct {
@@ -283,12 +283,12 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.RoleCount.Count(childComplexity), true
-	case "RoleCount.roleId":
-		if e.complexity.RoleCount.RoleID == nil {
+	case "RoleCount.role":
+		if e.complexity.RoleCount.Role == nil {
 			break
 		}
 
-		return e.complexity.RoleCount.RoleID(childComplexity), true
+		return e.complexity.RoleCount.Role(childComplexity), true
 
 	case "RoleRemovalResult.error":
 		if e.complexity.RoleRemovalResult.Error == nil {
@@ -539,7 +539,7 @@ type UserRoles {
 
 """ Total number of users assigned to a role """
 type RoleCount {
-    roleId: String!
+    role: Role!
     count: Int!
 }
 
@@ -1632,30 +1632,38 @@ func (ec *executionContext) fieldContext_RoleAssignmentResult_assignedCount(_ co
 	return fc, nil
 }
 
-func (ec *executionContext) _RoleCount_roleId(ctx context.Context, field graphql.CollectedField, obj *RoleCount) (ret graphql.Marshaler) {
+func (ec *executionContext) _RoleCount_role(ctx context.Context, field graphql.CollectedField, obj *RoleCount) (ret graphql.Marshaler) {
 	return graphql.ResolveField(
 		ctx,
 		ec.OperationContext,
 		field,
-		ec.fieldContext_RoleCount_roleId,
+		ec.fieldContext_RoleCount_role,
 		func(ctx context.Context) (any, error) {
-			return obj.RoleID, nil
+			return obj.Role, nil
 		},
 		nil,
-		ec.marshalNString2string,
+		ec.marshalNRole2ᚖgoᚗplatformᚑmeshᚗioᚋiamᚑserviceᚋpkgᚋgraphᚐRole,
 		true,
 		true,
 	)
 }
 
-func (ec *executionContext) fieldContext_RoleCount_roleId(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+func (ec *executionContext) fieldContext_RoleCount_role(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "RoleCount",
 		Field:      field,
 		IsMethod:   false,
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
-			return nil, errors.New("field of type String does not have child fields")
+			switch field.Name {
+			case "id":
+				return ec.fieldContext_Role_id(ctx, field)
+			case "displayName":
+				return ec.fieldContext_Role_displayName(ctx, field)
+			case "description":
+				return ec.fieldContext_Role_description(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type Role", field.Name)
 		},
 	}
 	return fc, nil
@@ -2020,8 +2028,8 @@ func (ec *executionContext) fieldContext_UserConnection_roleCounts(_ context.Con
 		IsResolver: false,
 		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
 			switch field.Name {
-			case "roleId":
-				return ec.fieldContext_RoleCount_roleId(ctx, field)
+			case "role":
+				return ec.fieldContext_RoleCount_role(ctx, field)
 			case "count":
 				return ec.fieldContext_RoleCount_count(ctx, field)
 			}
@@ -4190,8 +4198,8 @@ func (ec *executionContext) _RoleCount(ctx context.Context, sel ast.SelectionSet
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("RoleCount")
-		case "roleId":
-			out.Values[i] = ec._RoleCount_roleId(ctx, field, obj)
+		case "role":
+			out.Values[i] = ec._RoleCount_role(ctx, field, obj)
 			if out.Values[i] == graphql.Null {
 				out.Invalids++
 			}
